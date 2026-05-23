@@ -1,0 +1,49 @@
+name: Publish to npm
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # required for OIDC trusted publisher + provenance
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted-publisher OIDC requires npm >= 11.5.1; Node 20 ships with npm 10.
+      - name: Upgrade npm CLI
+        run: npm install -g npm@latest
+
+      # `--ignore-scripts` skips both `prepare` (we build explicitly below) and
+      # `postinstall` (Playwright Chromium download is ~200 MB and unnecessary
+      # on CI — unit tests do not launch a browser, and the published tarball
+      # only ships `dist/`).
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify tag matches package.json version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag v$TAG_VERSION does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public

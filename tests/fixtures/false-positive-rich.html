@@ -1,0 +1,10 @@
+<!doctype html>
+<html><head><title>Just a moment...</title></head>
+<body>
+  <article>
+    <h1>Documentation hub</h1>
+    <p>This page intentionally has a title that matches the Cloudflare interstitial pattern, but it is in fact a real article. The captcha heuristic must avoid false positives when substantial readable content is present. Below we describe the false-positive guard in detail.</p>
+    <p>If the heuristic detects captcha markers but the body of the document contains more than five hundred characters of human-readable prose, we proceed with extraction anyway. This handles cases where a page transiently shows interstitial markers or where a site uses captcha-like CSS naming for unrelated UI elements.</p>
+    <p>The guard is implemented inside the extraction pipeline rather than inside the detector itself, so the detector remains a pure low-level check.</p>
+  </article>
+</body></html>

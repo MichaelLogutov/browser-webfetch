@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.vitest/
+*.log
+.DS_Store
+profile/
+.claude/settings.local.json
+docs/superpowers/

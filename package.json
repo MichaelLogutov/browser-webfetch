@@ -1,0 +1,69 @@
+{
+  "name": "browser-webfetch",
+  "version": "1.0.0",
+  "description": "Headed-Chromium fallback for Claude Code's WebFetch — handles anti-bot/WAF challenges (Cloudflare, Servicepipe, DataDome, etc.), captchas, and login-gated pages via a persistent profile.",
+  "type": "module",
+  "bin": {
+    "browser-webfetch": "./dist/main.js"
+  },
+  "author": "Michael Logutov",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MichaelLogutov/browser-webfetch.git"
+  },
+  "bugs": {
+    "url": "https://github.com/MichaelLogutov/browser-webfetch/issues"
+  },
+  "homepage": "https://github.com/MichaelLogutov/browser-webfetch#readme",
+  "keywords": [
+    "mcp",
+    "claude-code",
+    "webfetch",
+    "playwright",
+    "chromium",
+    "captcha",
+    "cloudflare",
+    "anti-bot",
+    "scraper",
+    "readability"
+  ],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/main.ts",
+    "test": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:all": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "prepare": "npm run build",
+    "postinstall": "playwright install chromium"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@mozilla/readability": "^0.6.0",
+    "cac": "^7.0.0",
+    "env-paths": "^4.0.0",
+    "jsdom": "^29.1.1",
+    "playwright": "^1.49.0",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "turndown": "^7.2.0",
+    "turndown-plugin-gfm": "^1.0.2"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^28.0.3",
+    "@types/node": "^25.9.0",
+    "@types/turndown": "^5.0.5",
+    "tsx": "^4.19.0",
+    "typescript": "^6.0.3",
+    "vitest": "^3.2.4"
+  }
+}
