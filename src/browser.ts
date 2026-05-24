@@ -1,10 +1,7 @@
 import { chromium as playwrightChromium, type BrowserContext, type Page } from 'playwright';
-import { chromium as extraChromium } from 'playwright-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import { chromium as stealthChromium } from 'rebrowser-playwright';
 import { sweepOldDownloads } from './download.js';
 import { logger } from './logger.js';
-
-extraChromium.use(StealthPlugin());
 
 export interface BrowserSingletonOptions {
   profileDir: string;
@@ -123,7 +120,7 @@ export class BrowserSingleton {
   }
 
   private async launchContext(): Promise<BrowserContext> {
-    const launcher = this.opts.disableStealth ? playwrightChromium : extraChromium;
+    const launcher = (this.opts.disableStealth ? playwrightChromium : stealthChromium) as typeof playwrightChromium;
     const startMinimized = this.opts.startMinimized !== false;
     const args: string[] = startMinimized
       ? ['--start-minimized']
