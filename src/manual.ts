@@ -1,4 +1,4 @@
-import type { Page } from 'playwright';
+import type { Page } from 'rebrowser-playwright';
 import { BwfError, ErrorCode } from './errors.js';
 
 const OVERLAY_HTML = `

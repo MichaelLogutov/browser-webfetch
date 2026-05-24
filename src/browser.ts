@@ -1,12 +1,10 @@
-import { chromium as playwrightChromium, type BrowserContext, type Page } from 'playwright';
-import { chromium as stealthChromium } from 'rebrowser-playwright';
+import { chromium, type BrowserContext, type Page } from 'rebrowser-playwright';
 import { sweepOldDownloads } from './download.js';
 import { logger } from './logger.js';
 
 export interface BrowserSingletonOptions {
   profileDir: string;
   idleTimeoutMs: number;
-  disableStealth?: boolean;
   windowPosition?: { x: number; y: number };
   windowSize?: { width: number; height: number };
   startMinimized?: boolean;
@@ -120,9 +118,8 @@ export class BrowserSingleton {
   }
 
   private async launchContext(): Promise<BrowserContext> {
-    const launcher = (this.opts.disableStealth ? playwrightChromium : stealthChromium) as typeof playwrightChromium;
     const startMinimized = this.opts.startMinimized !== false;
-    const args: string[] = startMinimized
+    const windowArgs: string[] = startMinimized
       ? ['--start-minimized']
       : (() => {
           const pos = this.opts.windowPosition ?? { x: 100, y: 100 };
@@ -133,15 +130,29 @@ export class BrowserSingleton {
           ];
         })();
 
+    // Disables the AutomationControlled blink feature that otherwise sets
+    // `navigator.webdriver = true`. rebrowser-playwright handles deeper
+    // Runtime.evaluate detection but does not touch this flag.
+    const stealthArgs = ['--disable-blink-features=AutomationControlled'];
+
     logger.info('launching browser', {
       profileDir: this.opts.profileDir,
       startMinimized,
     });
 
-    const ctx = await launcher.launchPersistentContext(this.opts.profileDir, {
+    const ctx = await chromium.launchPersistentContext(this.opts.profileDir, {
       headless: false,
       viewport: null,
-      args,
+      args: [...windowArgs, ...stealthArgs],
+      ignoreDefaultArgs: ['--enable-automation'],
+    });
+
+    // Real Chrome exposes `window.chrome.runtime` as an object; non-extension
+    // Chromium builds leave it undefined, which bot-detection scripts flag.
+    await ctx.addInitScript(() => {
+      const w = window as unknown as { chrome?: { runtime?: unknown } };
+      w.chrome = w.chrome ?? {};
+      w.chrome.runtime = w.chrome.runtime ?? {};
     });
 
     ctx.on('close', () => {

@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http';
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { BrowserContext } from 'playwright';
+import type { BrowserContext } from 'rebrowser-playwright';
 import { BrowserSingleton } from '../../src/browser.js';
 import { downloadToFile } from '../../src/download.js';
 

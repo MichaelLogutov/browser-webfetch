@@ -15,7 +15,6 @@ interface CliFlags {
   manualTimeout?: number;
   queueTimeout?: number;
   idleTimeout?: number;
-  stealth?: boolean;
   profile?: string;
   json?: boolean;
   download?: boolean;
@@ -34,7 +33,6 @@ export async function runCli(argv: string[]): Promise<number> {
     .option('--manual-timeout <seconds>', 'Captcha manual-solve timeout', { default: 300 })
     .option('--queue-timeout <seconds>', 'Queue wait timeout', { default: 30 })
     .option('--idle-timeout <seconds>', 'Browser idle shutdown', { default: 300 })
-    .option('--no-stealth', 'Disable stealth patches')
     .option('--profile <path>', 'Profile dir override')
     .option('--json', 'Emit JSON envelope')
     .option('--download', 'Save raw bytes (PDF/image/binary) to disk and print the path')
@@ -50,7 +48,6 @@ export async function runCli(argv: string[]): Promise<number> {
       const browser = new BrowserSingleton({
         profileDir: resolveProfileDir(flags.profile),
         idleTimeoutMs: (flags.idleTimeout ?? 300) * 1000,
-        disableStealth: flags.stealth === false,
         startMinimized: flags.show !== true,
         downloadDir,
       });

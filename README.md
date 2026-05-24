@@ -56,7 +56,6 @@ Flags:
 - `--manual-timeout <seconds>` (default: 300)
 - `--queue-timeout <seconds>` (default: 30)
 - `--idle-timeout <seconds>` (default: 300)
-- `--no-stealth` (debug)
 - `--profile <path>` (also via `BROWSER_WEBFETCH_PROFILE` env var)
 - `--json` — emit `{ url, finalUrl, body, durationMs }` instead of bare content
 - `--download` — save raw bytes (PDF, image, binary) to disk and print the absolute path

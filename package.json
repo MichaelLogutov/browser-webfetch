@@ -41,7 +41,7 @@
     "test:all": "vitest run",
     "typecheck": "tsc --noEmit",
     "prepare": "npm run build",
-    "postinstall": "playwright install chromium"
+    "postinstall": "playwright-core install chromium"
   },
   "engines": {
     "node": ">=20"
@@ -52,7 +52,7 @@
     "cac": "^7.0.0",
     "env-paths": "^4.0.0",
     "jsdom": "^29.1.1",
-    "playwright": "^1.49.0",
+    "playwright-core": "1.52.0",
     "rebrowser-playwright": "^1.52.0",
     "turndown": "^7.2.0",
     "turndown-plugin-gfm": "^1.0.2"

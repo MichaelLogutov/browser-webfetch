@@ -1,4 +1,4 @@
-import { errors as PlaywrightErrors, type Page, type Response } from 'playwright';
+import { errors as PlaywrightErrors, type Page, type Response } from 'rebrowser-playwright';
 import { JSDOM } from 'jsdom';
 import { BrowserSingleton } from './browser.js';
 import { FifoQueue } from './queue.js';

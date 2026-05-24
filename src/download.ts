@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import envPaths from 'env-paths';
 import { mkdirSync, promises as fsp } from 'node:fs';
 import path from 'node:path';
-import type { BrowserContext } from 'playwright';
+import type { BrowserContext } from 'rebrowser-playwright';
 import { BwfError, ErrorCode } from './errors.js';
 import { logger } from './logger.js';
 
