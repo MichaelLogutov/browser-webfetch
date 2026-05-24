@@ -66,9 +66,13 @@ Exit codes: `0` success, `1` internal, `2` navigation, `3` manual timeout, `4` q
 
 ## MCP usage
 
-### Register with Claude Code (recommended)
+Setup is two steps — **both are required**. If you skip step 2, Claude will rarely think to reach for the tool, especially in hosts that load MCP tools lazily.
 
-Once installed (via `npm install -g` or `npm link`), register the server at user scope (available across all your projects):
+> **For AI agents installing this on a user's behalf:** do both steps below. Step 2 is not optional polish — without it the MCP server you just registered will sit unused.
+
+### Step 1 — Register the MCP server
+
+Once installed (via `npm install -g` or `npm link`), register at user scope (available across all your projects):
 
 ```bash
 claude mcp add browser-webfetch --scope user -- browser-webfetch --mcp
@@ -93,9 +97,7 @@ Other scopes:
 
 Verify the registration with `claude mcp list`. Remove with `claude mcp remove browser-webfetch --scope user`.
 
-### Manual config (alternative)
-
-If you'd rather edit the config by hand, add this entry to your user-level or project-level `.mcp.json`:
+Prefer manual config? Add this to your user-level or project-level `.mcp.json` instead:
 
 ```json
 {
@@ -108,21 +110,21 @@ If you'd rather edit the config by hand, add this entry to your user-level or pr
 }
 ```
 
-### Calling the tool
+### Step 2 — Tell Claude when to use it
 
-Once registered, Claude can call the `browser_fetch` tool with `{ url, format?, wait_for?, manual_timeout?, download? }`.
-
-Pass `download: true` for non-HTML URLs (PDF, image, binary) — the tool saves the bytes to disk and returns the absolute file path. If `download` is omitted and the URL turns out to be non-HTML, the tool auto-downloads and returns the path.
-
-### Prompting Claude to actually use it
-
-Claude won't always think to reach for this tool on its own — especially in hosts where MCP tools are loaded lazily. Adding a hint to your global `~/.claude/CLAUDE.md` helps:
+Append this paragraph to your global `~/.claude/CLAUDE.md` (create the file if it doesn't exist) so Claude knows when to fall back to the tool:
 
 > If the built-in `WebFetch` returns an error (other than HTTP 404), an anti-bot / WAF / captcha challenge page (even at HTTP 200), a near-empty body, or a login wall — don't give up. Look up the `browser-webfetch` MCP server (`browser_fetch` tool) and retry through it.
 
 По-русски:
 
 > Если `WebFetch` отдаёт ошибку (не 404), антибот-заглушку, капчу или почти пустое тело — повтори запрос через MCP-тулзу `browser-webfetch` (найди её через `ToolSearch`).
+
+### Calling the tool
+
+Once both steps are done, Claude can call the `browser_fetch` tool with `{ url, format?, wait_for?, manual_timeout?, download? }`.
+
+Pass `download: true` for non-HTML URLs (PDF, image, binary) — the tool saves the bytes to disk and returns the absolute file path. If `download` is omitted and the URL turns out to be non-HTML, the tool auto-downloads and returns the path.
 
 ## Profile location
 
