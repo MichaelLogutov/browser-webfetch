@@ -126,6 +126,22 @@ Once both steps are done, Claude can call the `browser_fetch` tool with `{ url, 
 
 Pass `download: true` for non-HTML URLs (PDF, image, binary) — the tool saves the bytes to disk and returns the absolute file path. If `download` is omitted and the URL turns out to be non-HTML, the tool auto-downloads and returns the path.
 
+## Troubleshooting
+
+### Chromium auto-install failed during `npm install`
+
+The `postinstall` hook runs `playwright-core install chromium` to download a ~144 MB Chromium build into `%LOCALAPPDATA%\ms-playwright` (or the platform equivalent). If that step fails (most often: slow extraction, Windows Defender mid-scan, or a Node version newer than `playwright-core` supports), the wrapper prints a notice and exits 0 — so `browser-webfetch` itself still installs cleanly. Retry the browser download manually:
+
+```bash
+npx playwright-core install chromium
+```
+
+If that also fails or hangs, check:
+
+- **Node version**: `playwright-core@1.52` is tested up to Node 22 LTS. Very recent Node releases (24+, 26-pre) may silently break the install step. Switching to Node 22 LTS or Node 24 LTS usually fixes it.
+- **Antivirus**: Windows Defender real-time scanning of freshly-extracted Chromium binaries can take several minutes. If the progress bar stays at 100% without finishing, **wait** rather than Ctrl+C — extraction is usually still running.
+- **Disk space / permissions**: ensure `%LOCALAPPDATA%\ms-playwright` is writable and has ~500 MB free.
+
 ## Profile location
 
 By default the persistent profile lives in the OS user data dir:
