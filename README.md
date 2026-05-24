@@ -1,5 +1,10 @@
 # browser-webfetch
 
+[![npm version](https://img.shields.io/npm/v/browser-webfetch.svg)](https://www.npmjs.com/package/browser-webfetch)
+[![License: MIT](https://img.shields.io/npm/l/browser-webfetch.svg)](https://github.com/MichaelLogutov/browser-webfetch/blob/main/LICENSE)
+[![Node.js](https://img.shields.io/node/v/browser-webfetch.svg)](https://nodejs.org/)
+[![Publish](https://github.com/MichaelLogutov/browser-webfetch/actions/workflows/publish.yml/badge.svg)](https://github.com/MichaelLogutov/browser-webfetch/actions/workflows/publish.yml)
+
 A Node.js CLI and MCP server that fetches URLs through a real headed Chromium with stealth patches and a persistent profile.
 
 Designed as a fallback for Claude Code's built-in `WebFetch` whenever the latter is blocked or returns something unusable:
@@ -178,4 +183,4 @@ Before the first automated publish works, configure the trusted publisher (and d
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/MichaelLogutov/browser-webfetch/blob/main/LICENSE).
