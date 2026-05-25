@@ -2,6 +2,7 @@ node_modules/
 dist/
 .vitest/
 *.log
+*.tgz
 .DS_Store
 profile/
 .claude/settings.local.json
