@@ -12,9 +12,15 @@
 // As a workaround, this module:
 //   1. Runs `playwright-core install chromium` with a hard timeout.
 //   2. On timeout (Windows only), kills the stuck process and falls back to
-//      downloading the zip ourselves and extracting via PowerShell's
-//      Expand-Archive, which uses .NET System.IO.Compression — a code path
-//      that is not affected by the yauzl bug.
+//      downloading each required component zip ourselves and extracting via
+//      PowerShell's Expand-Archive, which uses .NET System.IO.Compression —
+//      a code path that is not affected by the yauzl bug.
+//
+// "Required components" on Windows = chromium + winldd. winldd is a tiny
+// Windows-only helper (PrintDeps.exe) that playwright invokes during launch
+// validation to check chrome.exe's DLL dependencies; without it, every
+// launch fails with "Executable doesn't exist at ...\winldd-*\PrintDeps.exe"
+// even if chromium itself is installed.
 //
 // Once any of the following happens, this whole file can be reduced to the
 // "happy path" (just `spawnSync('playwright-core install chromium')`):
@@ -40,6 +46,12 @@ const require_ = createRequire(import.meta.url);
 // certainly the yauzl/extract-zip hang seen on some Windows configurations.
 const PLAYWRIGHT_INSTALL_TIMEOUT_MS = 4 * 60 * 1000;
 
+const REQUIRED_COMPONENTS_WIN32 = ['chromium', 'winldd'] as const;
+
+interface BrowsersJson {
+  browsers: Array<{ name: string; revision: string }>;
+}
+
 let ensurePromise: Promise<void> | null = null;
 
 export function ensureChromium(): Promise<void> {
@@ -49,12 +61,11 @@ export function ensureChromium(): Promise<void> {
 }
 
 async function run(): Promise<void> {
-  const exe = chromium.executablePath();
-  if (exe && existsSync(exe)) return;
+  if (allRequiredPresent()) return;
 
   printFirstRunBanner();
 
-  if (await tryPlaywrightInstall()) {
+  if (await tryPlaywrightInstall() && allRequiredPresent()) {
     process.stderr.write('\n[browser-webfetch] Chromium installed. Continuing...\n\n');
     return;
   }
@@ -70,9 +81,9 @@ async function run(): Promise<void> {
       '[browser-webfetch] for yauzl/extract-zip hangs seen on some Windows machines).\n\n',
     );
     await manualInstallWindows();
-    if (existsSync(exe)) {
+    if (allRequiredPresent()) {
       process.stderr.write(
-        '\n[browser-webfetch] Chromium installed via manual fallback. Continuing...\n\n',
+        '\n[browser-webfetch] Installed via manual fallback. Continuing...\n\n',
       );
       return;
     }
@@ -94,6 +105,44 @@ function printFirstRunBanner(): void {
   process.stderr.write('[browser-webfetch] Please DO NOT interrupt; there is no progress output\n');
   process.stderr.write('[browser-webfetch] between the download finishing and extraction completing.\n');
   process.stderr.write(`${sep}\n\n`);
+}
+
+function getInstallRoot(): string {
+  if (process.env.PLAYWRIGHT_BROWSERS_PATH) return process.env.PLAYWRIGHT_BROWSERS_PATH;
+  if (process.platform === 'win32') {
+    const local =
+      process.env.LOCALAPPDATA ?? join(process.env.USERPROFILE ?? '', 'AppData', 'Local');
+    return join(local, 'ms-playwright');
+  }
+  // mac/linux: only used for our Windows-specific marker-file checks; on
+  // those platforms we rely on chromium.executablePath() instead.
+  return '';
+}
+
+function getBrowsersManifest(): BrowsersJson {
+  const playwrightDir = dirname(require_.resolve('playwright-core/package.json'));
+  return require_(join(playwrightDir, 'browsers.json')) as BrowsersJson;
+}
+
+function allRequiredPresent(): boolean {
+  const exe = chromium.executablePath();
+  if (!exe || !existsSync(exe)) return false;
+
+  if (process.platform === 'win32') {
+    const browsers = getBrowsersManifest();
+    for (const name of REQUIRED_COMPONENTS_WIN32) {
+      const entry = browsers.browsers.find((b) => b.name === name);
+      if (!entry) return false;
+      const dir = join(getInstallRoot(), `${name}-${entry.revision}`);
+      // INSTALLATION_COMPLETE is the marker playwright writes after a clean
+      // install; we write it too in the manual fallback so re-runs short-
+      // circuit. Without this check, a partial install (chromium present,
+      // winldd missing) would never trigger a retry.
+      if (!existsSync(join(dir, 'INSTALLATION_COMPLETE'))) return false;
+    }
+  }
+
+  return true;
 }
 
 async function tryPlaywrightInstall(): Promise<boolean> {
@@ -125,23 +174,25 @@ async function tryPlaywrightInstall(): Promise<boolean> {
   });
 }
 
-interface BrowsersJson {
-  browsers: Array<{ name: string; revision: string; browserVersion: string }>;
+async function manualInstallWindows(): Promise<void> {
+  const browsers = getBrowsersManifest();
+  for (const name of REQUIRED_COMPONENTS_WIN32) {
+    const entry = browsers.browsers.find((b) => b.name === name);
+    if (!entry) throw new Error(`${name} entry not found in browsers.json`);
+    await installComponentWindows(name, entry.revision);
+  }
 }
 
-async function manualInstallWindows(): Promise<void> {
-  const playwrightDir = dirname(require_.resolve('playwright-core/package.json'));
-  const browsers = require_(join(playwrightDir, 'browsers.json')) as BrowsersJson;
-  const chromiumEntry = browsers.browsers.find((b) => b.name === 'chromium');
-  if (!chromiumEntry) throw new Error('chromium entry not found in browsers.json');
+async function installComponentWindows(name: string, revision: string): Promise<void> {
+  const installDir = join(getInstallRoot(), `${name}-${revision}`);
 
-  const revision = chromiumEntry.revision;
-  const url = `https://cdn.playwright.dev/dbazure/download/playwright/builds/chromium/${revision}/chromium-win64.zip`;
-  const installRoot =
-    process.env.PLAYWRIGHT_BROWSERS_PATH ||
-    join(process.env.LOCALAPPDATA ?? join(process.env.USERPROFILE ?? '', 'AppData', 'Local'), 'ms-playwright');
-  const installDir = join(installRoot, `chromium-${revision}`);
-  const zipPath = join(tmpdir(), `browser-webfetch-chromium-${revision}.zip`);
+  if (existsSync(join(installDir, 'INSTALLATION_COMPLETE'))) {
+    process.stderr.write(`[browser-webfetch] ${name}-${revision} already installed, skipping.\n`);
+    return;
+  }
+
+  const url = `https://cdn.playwright.dev/dbazure/download/playwright/builds/${name}/${revision}/${name}-win64.zip`;
+  const zipPath = join(tmpdir(), `browser-webfetch-${name}-${revision}.zip`);
 
   process.stderr.write(`[browser-webfetch] Downloading ${url}\n`);
   await downloadFile(url, zipPath);
@@ -167,7 +218,7 @@ async function manualInstallWindows(): Promise<void> {
   }
 
   // Marker file playwright writes after a successful install. Without it
-  // playwright considers the browser missing and re-attempts the broken
+  // playwright considers the component missing and re-attempts the broken
   // install on every subsequent launch.
   await writeFile(join(installDir, 'INSTALLATION_COMPLETE'), '');
 }
