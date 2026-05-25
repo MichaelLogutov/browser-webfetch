@@ -173,14 +173,12 @@ npm run test:all          # both
 
 ## Release (maintainers)
 
-Publishing is automated via GitHub Actions using npm's [Trusted Publishers](https://docs.npmjs.com/trusted-publishers) (OIDC) — no `NPM_TOKEN` secret is stored anywhere. To cut a release:
+Releases are fully automated via two GitHub Actions workflows:
 
-```bash
-npm version patch     # or minor / major — bumps package.json and creates a git tag
-git push --follow-tags
-```
+1. **[release-please](https://github.com/googleapis/release-please)** ([.github/workflows/release-please.yml](.github/workflows/release-please.yml)) watches pushes to `main`. When it sees [Conventional Commits](https://www.conventionalcommits.org/) since the last tag (`feat:`, `fix:`, `perf:`, or `BREAKING CHANGE:`), it opens / updates a release PR that bumps `package.json`, updates `CHANGELOG.md`, and proposes the next semver version.
+2. Merging that PR creates a git tag `vX.Y.Z` and a GitHub Release with auto-generated notes. The tag triggers **[publish.yml](.github/workflows/publish.yml)**, which builds, tests, and runs `npm publish --provenance --access public` — auth via npm's [Trusted Publishers](https://docs.npmjs.com/trusted-publishers) (OIDC), no `NPM_TOKEN` secret stored anywhere.
 
-The push of a `v*` tag triggers `.github/workflows/publish.yml`, which builds, tests, and runs `npm publish --provenance --access public`.
+So the maintainer workflow is just: write conventional commits → merge the release PR when ready.
 
 ### One-time setup on npmjs.com
 
@@ -196,7 +194,7 @@ Before the first automated publish works, configure the trusted publisher (and d
    - Repository name: `browser-webfetch`
    - Workflow filename: `publish.yml`
    - Environment name: *(leave blank)*
-3. After that, every `git push` of a `v*` tag publishes automatically — no tokens needed, and the package page on npm will show a provenance badge.
+3. After that, every merged release-please PR publishes automatically — no tokens needed, and the package page on npm will show a provenance badge.
 
 ## License
 
