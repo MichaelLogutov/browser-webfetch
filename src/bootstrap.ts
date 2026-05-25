@@ -1,7 +1,11 @@
 import { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import { chromium } from 'rebrowser-playwright';
 import { logger } from './logger.js';
+
+const require_ = createRequire(import.meta.url);
 
 let ensurePromise: Promise<void> | null = null;
 
@@ -25,9 +29,17 @@ async function run(): Promise<void> {
   process.stderr.write('[browser-webfetch] between the download finishing and extraction completing.\n');
   process.stderr.write(`${sep}\n\n`);
 
-  const result = spawnSync('playwright-core', ['install', 'chromium'], {
+  // Resolve playwright-core's package directory via its package.json (which
+  // is allowed by its `exports` map), then point at `cli.js` at the root.
+  // We can't `require('playwright-core/cli.js')` directly because cli.js is
+  // not listed in `exports`, but we don't need to — we just spawn it.
+  // We also can't rely on a `playwright-core` binary on PATH because npm
+  // only links the bins of the directly-installed package globally, not of
+  // nested deps.
+  const cliPath = join(dirname(require_.resolve('playwright-core/package.json')), 'cli.js');
+
+  const result = spawnSync(process.execPath, [cliPath, 'install', 'chromium'], {
     stdio: 'inherit',
-    shell: true,
   });
 
   if (result.status !== 0) {
