@@ -27,15 +27,21 @@ Requirements: Node.js 20+.
 npm install -g browser-webfetch
 ```
 
-The `postinstall` hook downloads Chromium (~200 MB) via Playwright on first install. After that, the `browser-webfetch` binary is on your `PATH`.
+The install itself is just JavaScript and finishes in seconds. The first time you run the CLI (or the MCP server makes its first tool call), `browser-webfetch` downloads Chromium (~150 MB) via Playwright and extracts it into the OS user data dir. That step is one-time and takes 2-5 minutes — please don't interrupt it.
 
 ### From source (for development)
 
 ```bash
 git clone https://github.com/MichaelLogutov/browser-webfetch.git
 cd browser-webfetch
-npm install   # `prepare` builds TypeScript; `postinstall` fetches Chromium
+npm install   # `prepare` builds TypeScript
 npm link      # exposes the `browser-webfetch` binary globally
+```
+
+Chromium is downloaded on first run; if you want to do it ahead of time:
+
+```bash
+npx playwright-core install chromium
 ```
 
 ## CLI usage
@@ -128,19 +134,19 @@ Pass `download: true` for non-HTML URLs (PDF, image, binary) — the tool saves 
 
 ## Troubleshooting
 
-### Chromium auto-install failed during `npm install`
+### Chromium first-run install failed
 
-The `postinstall` hook runs `playwright-core install chromium` to download a ~144 MB Chromium build into `%LOCALAPPDATA%\ms-playwright` (or the platform equivalent). If that step fails (most often: slow extraction, Windows Defender mid-scan, or a Node version newer than `playwright-core` supports), the wrapper prints a notice and exits 0 — so `browser-webfetch` itself still installs cleanly. Retry the browser download manually:
+The first invocation of `browser-webfetch` (CLI or MCP) downloads Chromium (~150 MB) into `%LOCALAPPDATA%\ms-playwright` (or the platform equivalent). If that step fails or hangs, check:
+
+- **Antivirus**: Windows Defender real-time scanning of freshly-extracted Chromium binaries can take several minutes. If the progress bar stays at 100% without finishing, **wait** rather than Ctrl+C — extraction is usually still running.
+- **Node version**: `playwright-core@1.52` is tested up to Node 22 LTS. Very recent Node releases (26+, pre-release builds) may silently break the install step. Switching to Node 22 LTS or Node 24 LTS usually fixes it.
+- **Disk space / permissions**: ensure `%LOCALAPPDATA%\ms-playwright` is writable and has ~500 MB free.
+
+To run the download manually (e.g. on a machine that won't have internet at first run):
 
 ```bash
 npx playwright-core install chromium
 ```
-
-If that also fails or hangs, check:
-
-- **Node version**: `playwright-core@1.52` is tested up to Node 22 LTS. Very recent Node releases (24+, 26-pre) may silently break the install step. Switching to Node 22 LTS or Node 24 LTS usually fixes it.
-- **Antivirus**: Windows Defender real-time scanning of freshly-extracted Chromium binaries can take several minutes. If the progress bar stays at 100% without finishing, **wait** rather than Ctrl+C — extraction is usually still running.
-- **Disk space / permissions**: ensure `%LOCALAPPDATA%\ms-playwright` is writable and has ~500 MB free.
 
 ## Profile location
 

@@ -30,7 +30,6 @@
   ],
   "files": [
     "dist",
-    "scripts",
     "README.md",
     "LICENSE"
   ],
@@ -41,8 +40,7 @@
     "test:integration": "vitest run --project integration",
     "test:all": "vitest run",
     "typecheck": "tsc --noEmit",
-    "prepare": "npm run build",
-    "postinstall": "node scripts/postinstall.cjs"
+    "prepare": "npm run build"
   },
   "engines": {
     "node": ">=20"

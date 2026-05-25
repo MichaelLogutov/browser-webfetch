@@ -1,6 +1,7 @@
 import { chromium, type BrowserContext, type Page } from 'rebrowser-playwright';
 import { sweepOldDownloads } from './download.js';
 import { logger } from './logger.js';
+import { ensureChromium } from './bootstrap.js';
 
 export interface BrowserSingletonOptions {
   profileDir: string;
@@ -118,6 +119,7 @@ export class BrowserSingleton {
   }
 
   private async launchContext(): Promise<BrowserContext> {
+    await ensureChromium();
     const startMinimized = this.opts.startMinimized !== false;
     const windowArgs: string[] = startMinimized
       ? ['--start-minimized']
