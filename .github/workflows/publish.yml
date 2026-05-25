@@ -1,8 +1,17 @@
-name: Publish to npm
+name: Publish to npm (manual)
+
+# Manual / fallback publish workflow. The normal publish path runs inside
+# release-please.yml as a chained job. This one is for cases where the chain
+# was missed (e.g. release-please was set up after the release was already
+# tagged) or for re-publishing a specific tag.
 
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish (e.g. v1.1.2)'
+        required: true
+        type: string
 
 jobs:
   publish:
@@ -13,20 +22,17 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      # Trusted-publisher OIDC requires npm >= 11.5.1; Node 20 ships with npm 10.
       - name: Upgrade npm CLI
         run: npm install -g npm@latest
 
-      # `--ignore-scripts` skips both `prepare` (we build explicitly below) and
-      # `postinstall` (Playwright Chromium download is ~200 MB and unnecessary
-      # on CI — unit tests do not launch a browser, and the published tarball
-      # only ships `dist/`).
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
@@ -36,9 +42,10 @@ jobs:
       - name: Verify tag matches package.json version
         run: |
           PKG_VERSION=$(node -p "require('./package.json').version")
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          TAG="${{ inputs.tag }}"
+          TAG_VERSION="${TAG#v}"
           if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
-            echo "::error::Tag v$TAG_VERSION does not match package.json version $PKG_VERSION"
+            echo "::error::Tag $TAG does not match package.json version $PKG_VERSION"
             exit 1
           fi
 
