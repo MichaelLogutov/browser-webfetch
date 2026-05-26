@@ -1,6 +1,6 @@
 {
   "name": "browser-webfetch",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "description": "Headed-Chromium fallback for Claude Code's WebFetch — handles anti-bot/WAF challenges (Cloudflare, Servicepipe, DataDome, etc.), captchas, and login-gated pages via a persistent profile.",
   "type": "module",
   "bin": {
