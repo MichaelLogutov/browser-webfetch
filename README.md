@@ -138,7 +138,7 @@ Pass `download: true` for non-HTML URLs (PDF, image, binary) — the tool saves 
 
 The first invocation of `browser-webfetch` (CLI or MCP) downloads Chromium (~150 MB) into `%LOCALAPPDATA%\ms-playwright` (or the platform equivalent). If that step fails or hangs, check:
 
-- **Antivirus**: Windows Defender real-time scanning of freshly-extracted Chromium binaries can take several minutes. If the progress bar stays at 100% without finishing, **wait** rather than Ctrl+C — extraction is usually still running.
+- **Antivirus**: Windows Defender real-time scanning of freshly-extracted Chromium binaries can take several minutes. If the progress bar stays at 100% without finishing, **wait** rather than Ctrl+C — extraction is usually still running. browser-webfetch falls back to PowerShell `Expand-Archive` after a 4-minute hang.
 - **Node version**: `playwright-core@1.52` is tested up to Node 22 LTS. Very recent Node releases (26+, pre-release builds) may silently break the install step. Switching to Node 22 LTS or Node 24 LTS usually fixes it.
 - **Disk space / permissions**: ensure `%LOCALAPPDATA%\ms-playwright` is writable and has ~500 MB free.
 
@@ -147,6 +147,28 @@ To run the download manually (e.g. on a machine that won't have internet at firs
 ```bash
 npx playwright-core install chromium
 ```
+
+### Browser launches but immediately exits ("Target page, context or browser has been closed")
+
+Chrome spawned, was given a PID, then disconnected before browser-webfetch could attach. The error is generic at the playwright layer; the actual cause is one of these (most likely first):
+
+1. **Antivirus blocking Chrome's helper processes**. Kaspersky, ESET, Norton, and similar HIPS-style products often kill `chrome.exe` subprocesses when launched from a non-`Program Files` path. Add the Chromium folder (e.g. `%LOCALAPPDATA%\ms-playwright`) to your AV's process / file exclusions.
+2. **Corrupted profile from previous failed launches**. Each failed launch can leave crash state in the profile dir; subsequent launches inherit the wreckage and keep crashing. Move the profile out of the way and let a fresh one be created:
+   ```powershell
+   # Windows
+   Rename-Item "$env:LOCALAPPDATA\browser-webfetch\Data\profile" profile.bak
+   ```
+   ```bash
+   # macOS / Linux
+   mv ~/Library/Application\ Support/browser-webfetch/profile profile.bak    # macOS
+   mv ~/.local/share/browser-webfetch/profile profile.bak                     # Linux
+   ```
+3. **Chromium install incomplete**. Force a reinstall:
+   ```bash
+   npx playwright-core install chromium --force
+   ```
+
+browser-webfetch exits with code 6 and prints this list to stderr when it detects the symptom, so you can follow the same checklist without leaving the terminal.
 
 ## Profile location
 

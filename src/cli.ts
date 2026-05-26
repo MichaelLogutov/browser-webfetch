@@ -95,7 +95,14 @@ export async function runCli(argv: string[]): Promise<number> {
     return 0;
   } catch (err) {
     if (err instanceof BwfError) {
-      logger.error(err.message, { code: err.code, ...err.context });
+      if (err.code === ErrorCode.LAUNCH_FAILED) {
+        // Multi-line help; bypass logger to avoid the timestamp prefix
+        // breaking each line.
+        process.stderr.write('\n' + err.message + '\n\n');
+        logger.error('browser launch failed', { code: err.code, ...err.context });
+      } else {
+        logger.error(err.message, { code: err.code, ...err.context });
+      }
       return exitCodeFor(err.code);
     }
     logger.error('unexpected error', { message: err instanceof Error ? err.message : String(err) });

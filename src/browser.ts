@@ -1,7 +1,9 @@
 import { chromium, type BrowserContext, type Page } from 'rebrowser-playwright';
+import { dirname } from 'node:path';
 import { sweepOldDownloads } from './download.js';
 import { logger } from './logger.js';
 import { ensureChromium } from './bootstrap.js';
+import { BwfError, ErrorCode, buildLaunchFailureMessage } from './errors.js';
 
 export interface BrowserSingletonOptions {
   profileDir: string;
@@ -142,12 +144,37 @@ export class BrowserSingleton {
       startMinimized,
     });
 
-    const ctx = await chromium.launchPersistentContext(this.opts.profileDir, {
-      headless: false,
-      viewport: null,
-      args: [...windowArgs, ...stealthArgs],
-      ignoreDefaultArgs: ['--enable-automation'],
-    });
+    let ctx: BrowserContext;
+    try {
+      ctx = await chromium.launchPersistentContext(this.opts.profileDir, {
+        headless: false,
+        viewport: null,
+        args: [...windowArgs, ...stealthArgs],
+        ignoreDefaultArgs: ['--enable-automation'],
+      });
+    } catch (err) {
+      // "Target page, context or browser has been closed" means Chrome
+      // spawned, got a PID, then disconnected before playwright could
+      // attach. Surface a help message — the real cause is one of
+      // {antivirus, corrupted profile, broken install}, all environmental.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Target page, context or browser has been closed')) {
+        const exePath = chromium.executablePath();
+        // chrome.exe lives at <ms-playwright>/chromium-<rev>/chrome-win/chrome.exe;
+        // walk up three levels to recover the ms-playwright root.
+        const msPlaywrightDir = exePath ? dirname(dirname(dirname(exePath))) : '(unknown)';
+        throw new BwfError(
+          ErrorCode.LAUNCH_FAILED,
+          buildLaunchFailureMessage({
+            profileDir: this.opts.profileDir,
+            msPlaywrightDir,
+            originalMessage: msg,
+          }),
+          { profileDir: this.opts.profileDir },
+        );
+      }
+      throw err;
+    }
 
     // Real Chrome exposes `window.chrome.runtime` as an object; non-extension
     // Chromium builds leave it undefined, which bot-detection scripts flag.
