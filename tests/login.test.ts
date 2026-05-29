@@ -27,6 +27,13 @@ describe('detectLoginWall', () => {
     expect(r.detected).toBe(true);
   });
 
+  it('detects a same-origin OAuth-button login page (Grafana/dex)', () => {
+    // Grafana serves its login in-place on the requested path: same origin, no
+    // password field, generic <title> — only an OAuth "Sign in with ..." link.
+    const r = detectLoginWall(doc(fixture('login-grafana-dex.html')), 200, GRAFANA, GRAFANA);
+    expect(r.detected).toBe(true);
+  });
+
   it('detects a same-origin /login path with a password field', () => {
     const r = detectLoginWall(
       doc(fixture('login-form.html')),

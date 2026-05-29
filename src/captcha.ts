@@ -96,16 +96,33 @@ export function detectLoginWall(
   }
   if (LOGIN_PATH_RE.test(pathOf(finalUrl))) return { detected: true, provider: 'login_path' };
 
-  // Weak signals — need at least two.
+  // Weak signals — need at least two. (The content guard above already ruled
+  // out content-rich same-origin pages, so these only fire on sparse pages.)
   let weak = 0;
   if (doc.querySelector('input[type=password]')) weak++;
-  const title = (doc.title ?? '').trim();
-  const heading = doc.querySelector('h1')?.textContent ?? '';
-  if (SIGNIN_TEXT_RE.test(title) || SIGNIN_TEXT_RE.test(heading)) weak++;
+  if (hasSigninText(doc)) weak++;
+  if (hasLoginLink(doc)) weak++;
   if (crossOrigin) weak++;
   if (weak >= 2) return { detected: true, provider: 'heuristic' };
 
   return { detected: false };
+}
+
+// Sign-in wording in the title or any heading / link / button — catches OAuth
+// "Sign in with <provider>" pages that have no password field.
+function hasSigninText(doc: Document): boolean {
+  if (SIGNIN_TEXT_RE.test((doc.title ?? '').trim())) return true;
+  for (const el of Array.from(doc.querySelectorAll('h1, h2, a, button'))) {
+    if (SIGNIN_TEXT_RE.test(el.textContent ?? '')) return true;
+  }
+  return false;
+}
+
+// A link pointing at a login / OAuth / SSO / SAML endpoint.
+function hasLoginLink(doc: Document): boolean {
+  return Boolean(
+    doc.querySelector('a[href*="login"], a[href*="oauth"], a[href*="sso"], a[href*="saml"]'),
+  );
 }
 
 function hostOf(u: string): string {
