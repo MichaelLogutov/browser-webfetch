@@ -34,6 +34,19 @@ describe('detectLoginWall', () => {
     expect(r.detected).toBe(true);
   });
 
+  it('detects a login SPA shell whose visible text is sparse despite huge inline scripts', () => {
+    // Grafana embeds a large inline bootdata <script> in <body>; body.textContent
+    // counts that, so the content guard must exclude script text or it skips.
+    const bigScript = `<script>window.grafanaBootData=${JSON.stringify({ blob: 'y'.repeat(5000) })}</script>`;
+    const html =
+      `<!doctype html><html><head><title>Grafana</title></head><body>${bigScript}` +
+      `<h2>Welcome to Grafana</h2>` +
+      `<a href="https://grafana.cloud.cian.tech/login/generic_oauth">Sign in with dex</a>` +
+      `</body></html>`;
+    const r = detectLoginWall(doc(html), 200, GRAFANA, GRAFANA);
+    expect(r.detected).toBe(true);
+  });
+
   it('detects a same-origin /login path with a password field', () => {
     const r = detectLoginWall(
       doc(fixture('login-form.html')),

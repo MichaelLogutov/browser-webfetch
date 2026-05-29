@@ -50,7 +50,17 @@ export function detectCaptchaInDom(doc: Document, httpStatus = 200): CaptchaDete
 }
 
 export function readableContentLength(doc: Document): number {
-  return (doc.body?.textContent ?? '').replace(/\s+/g, ' ').trim().length;
+  const body = doc.body;
+  if (!body) return 0;
+  // `textContent` includes text inside <script>/<style>/<noscript>/<template>;
+  // SPA shells (e.g. Grafana's inline bootdata) embed large JSON blobs there
+  // that would masquerade as readable content. Strip them on a clone so the
+  // live DOM is untouched.
+  const clone = body.cloneNode(true) as HTMLElement;
+  for (const el of Array.from(clone.querySelectorAll('script, style, noscript, template'))) {
+    el.remove();
+  }
+  return (clone.textContent ?? '').replace(/\s+/g, ' ').trim().length;
 }
 
 export interface LoginWallDetection {
