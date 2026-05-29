@@ -57,6 +57,14 @@ describe('detectLoginWall', () => {
     expect(r.detected).toBe(true);
   });
 
+  it('detects a same-origin /login URL even when the page is content-rich', () => {
+    // Strong signal (login path) must win over the content-length guard.
+    const rich = `<p>${'word '.repeat(200)}</p>`;
+    const html = `<!doctype html><html><head><title>Login</title></head><body>${rich}<form action="/login"><input type="password" /></form></body></html>`;
+    const r = detectLoginWall(doc(html), 200, 'https://app.example.com/login', 'https://app.example.com/dash');
+    expect(r.detected).toBe(true);
+  });
+
   it('does NOT flag a rich same-origin article that merely has a login box', () => {
     const r = detectLoginWall(
       doc(fixture('false-positive-rich.html')),

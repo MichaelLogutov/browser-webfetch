@@ -94,11 +94,8 @@ export function detectLoginWall(
   const reqHost = hostOf(requestedUrl);
   const crossOrigin = finalHost !== '' && reqHost !== '' && finalHost !== reqHost;
 
-  // Guard: substantial content on the *requested* origin is real content, not a
-  // wall. Only applies when we did not get redirected away.
-  if (!crossOrigin && readableContentLength(doc) > 500) return { detected: false };
-
-  // Strong signals — any one suffices.
+  // Strong signals — unconditional (never false positives, regardless of how
+  // much content the page has, so they are checked before the content guard).
   if (httpStatus === 401) return { detected: true, provider: 'http_401' };
   if (crossOrigin) {
     const idp = KNOWN_IDP_HOSTS.find((h) => finalHost === h || finalHost.endsWith('.' + h));
@@ -106,8 +103,11 @@ export function detectLoginWall(
   }
   if (LOGIN_PATH_RE.test(pathOf(finalUrl))) return { detected: true, provider: 'login_path' };
 
-  // Weak signals — need at least two. (The content guard above already ruled
-  // out content-rich same-origin pages, so these only fire on sparse pages.)
+  // Content guard: substantial content on the *requested* origin is real
+  // content, so only the weak heuristics below are gated by it.
+  if (!crossOrigin && readableContentLength(doc) > 500) return { detected: false };
+
+  // Weak signals — need at least two. (Only reached on sparse pages.)
   let weak = 0;
   if (doc.querySelector('input[type=password]')) weak++;
   if (hasSigninText(doc)) weak++;
