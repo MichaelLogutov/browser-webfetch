@@ -66,6 +66,7 @@ Flags:
 - `--json` — emit `{ url, finalUrl, body, durationMs }` instead of bare content
 - `--download` — save raw bytes (PDF, image, binary) to disk and print the absolute path
 - `--download-dir <path>` — override download directory (also via `BROWSER_WEBFETCH_DOWNLOAD_DIR` env var)
+- `--interactive` — surface the window and wait for manual login/interaction, then return the last page content
 - `--show` — keep the browser window visible (default: starts minimized; restores automatically when a captcha needs to be solved)
 
 Environment variables: `BROWSER_WEBFETCH_PROFILE` (profile dir), `BROWSER_WEBFETCH_DOWNLOAD_DIR` (download dir), `BROWSER_WEBFETCH_LOG_LEVEL` (`debug|info|warn|error`), `BROWSER_WEBFETCH_RECLAIM=1` (opt-in: kill stale Chromium that holds the persistent profile after a crash — off by default; see [Troubleshooting](#browser-launches-but-immediately-exits-target-page-context-or-browser-has-been-closed)).
@@ -133,6 +134,22 @@ Append this paragraph to your global `~/.claude/CLAUDE.md` (create the file if i
 Once both steps are done, Claude can call the `browser_fetch` tool with `{ url, format?, wait_for?, manual_timeout?, download? }`.
 
 Pass `download: true` for non-HTML URLs (PDF, image, binary) — the tool saves the bytes to disk and returns the absolute file path. If `download` is omitted and the URL turns out to be non-HTML, the tool auto-downloads and returns the path.
+
+## Login / SSO walls
+
+If a URL is behind a login or SSO session, an unauthenticated fetch lands on the
+sign-in page. browser-webfetch detects common login walls (redirects to known
+identity providers, `/login` `/sso` `/oauth` paths, HTTP 401, password forms)
+and surfaces the Chromium window so you can log in; after you finish it returns
+the real content. The login persists in the profile, so later fetches succeed
+automatically.
+
+You can also force this: pass `interactive: true` (MCP) or `--interactive` (CLI).
+The window is surfaced and the tool waits until you **close the tab**, then
+returns whatever was last loaded. If you don't act within `manual_timeout`
+(default 300s) the call fails with `MANUAL_TIMEOUT` and a message telling the
+agent the user likely didn't notice / stepped away, so it should retry rather
+than treat it as a failure.
 
 ## Troubleshooting
 
