@@ -33,7 +33,7 @@ export async function runMcpServer(): Promise<void> {
       {
         name: 'browser_fetch',
         description:
-          'Fetch a URL through a real headed Chromium with stealth patches and a persistent profile. USE THIS AS A FALLBACK FOR THE BUILT-IN WebFetch whenever WebFetch is blocked or returns something unusable, specifically: (a) any HTTP error other than 404 (403, 429, 503, 5xx, network/TLS errors, timeouts); (b) a response that looks like an anti-bot / WAF / DDoS-protection challenge or interstitial — Cloudflare ("Just a moment...", "Checking your browser"), Servicepipe, DataDome, PerimeterX, Akamai Bot Manager, Imperva/Incapsula, Qrator, Kaspersky Anti-DDoS, etc. — even when the HTTP status is 200; (c) a captcha (reCAPTCHA, hCaptcha, Turnstile, Yandex SmartCaptcha, FunCaptcha); (d) a near-empty body or a JS-only shell where the real content is rendered client-side; (e) a page that requires a logged-in session (the browser profile persists across runs, so a one-time manual login is enough). If a captcha is detected, the Chromium window surfaces and waits for the user to solve it interactively, then continues. For non-HTML URLs (PDFs, images, binaries), set `download: true` to save the bytes to disk; the response is the absolute file path. If `download` is omitted and the URL turns out to be non-HTML, the tool auto-downloads and returns the path (a warning is logged).',
+          'Fetch a URL through a real headed Chromium with stealth patches and a persistent profile. USE THIS AS A FALLBACK FOR THE BUILT-IN WebFetch whenever WebFetch is blocked or returns something unusable, specifically: (a) any HTTP error other than 404 (403, 429, 503, 5xx, network/TLS errors, timeouts); (b) a response that looks like an anti-bot / WAF / DDoS-protection challenge or interstitial — Cloudflare ("Just a moment...", "Checking your browser"), Servicepipe, DataDome, PerimeterX, Akamai Bot Manager, Imperva/Incapsula, Qrator, Kaspersky Anti-DDoS, etc. — even when the HTTP status is 200; (c) a captcha (reCAPTCHA, hCaptcha, Turnstile, Yandex SmartCaptcha, FunCaptcha); (d) a near-empty body or a JS-only shell where the real content is rendered client-side; (e) a page that requires a logged-in session (the browser profile persists across runs, so a one-time manual login is enough). If a captcha is detected, the Chromium window surfaces and waits for the user to solve it interactively, then continues. For non-HTML URLs (PDFs, images, binaries), set `download: true` to save the bytes to disk; the response is the absolute file path. If `download` is omitted and the URL turns out to be non-HTML, the tool auto-downloads and returns the path (a warning is logged). If a fetch returns a login / SSO / sign-in page (often a redirect to accounts.google.com, login.microsoftonline.com, etc.), retry the SAME url with `interactive: true`: the Chromium window is surfaced for the user to log in, and after they close it the real content is returned. The login persists in the profile, so later fetches of that site succeed without `interactive`.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -53,6 +53,11 @@ export async function runMcpServer(): Promise<void> {
               description:
                 'If true, skip page rendering and download raw bytes (PDF/image/binary) to disk. Response is the absolute file path. Default: false.',
             },
+            interactive: {
+              type: 'boolean',
+              description:
+                'Force the interactive flow: surface the Chromium window and wait for the user to finish (e.g. log in) and CLOSE the tab, then return the last page content. Use when a response looks like a login/SSO page or otherwise needs the user to act. Default: false.',
+            },
           },
           required: ['url'],
         },
@@ -70,6 +75,7 @@ export async function runMcpServer(): Promise<void> {
       wait_for?: string;
       manual_timeout?: number;
       download?: boolean;
+      interactive?: boolean;
     };
     if (!args.url) {
       throw new BwfError(ErrorCode.INVALID_ARGS, 'url is required');
@@ -86,6 +92,7 @@ export async function runMcpServer(): Promise<void> {
         navTimeoutMs: 30_000,
         manualTimeoutMs: (args.manual_timeout ?? 300) * 1000,
         download: args.download === true,
+        interactive: args.interactive === true,
         downloadDir,
         browser,
         queue,

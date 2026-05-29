@@ -18,6 +18,7 @@ interface CliFlags {
   profile?: string;
   json?: boolean;
   download?: boolean;
+  interactive?: boolean;
   downloadDir?: string;
   show?: boolean;
 }
@@ -37,6 +38,10 @@ export async function runCli(argv: string[]): Promise<number> {
     .option('--json', 'Emit JSON envelope')
     .option('--download', 'Save raw bytes (PDF/image/binary) to disk and print the path')
     .option('--download-dir <path>', 'Override download directory')
+    .option(
+      '--interactive',
+      'Surface the window and wait for manual login/interaction, then return the last content',
+    )
     .option('--show', 'Show the browser window (default: minimized)')
     .action(async (url: string, flags: CliFlags) => {
       const format = (flags.format ?? 'markdown') as OutputFormat;
@@ -61,6 +66,7 @@ export async function runCli(argv: string[]): Promise<number> {
           navTimeoutMs: (flags.navTimeout ?? 30) * 1000,
           manualTimeoutMs: (flags.manualTimeout ?? 300) * 1000,
           download: flags.download === true,
+          interactive: flags.interactive === true,
           downloadDir,
           browser,
           queue,
