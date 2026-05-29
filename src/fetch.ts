@@ -3,10 +3,15 @@ import { JSDOM } from 'jsdom';
 import { BrowserSingleton } from './browser.js';
 import { FifoQueue } from './queue.js';
 import { BwfError, ErrorCode } from './errors.js';
-import { detectCaptchaInDom, readableContentLength } from './captcha.js';
+import { detectCaptchaInDom, detectLoginWall, readableContentLength } from './captcha.js';
 import { downloadToFile } from './download.js';
 import { extractContent, OutputFormat } from './extract.js';
-import { injectOverlay, removeOverlay, waitForManualResolution } from './manual.js';
+import {
+  injectOverlay,
+  removeOverlay,
+  waitForManualResolution,
+  waitForManualInteraction,
+} from './manual.js';
 import { logger } from './logger.js';
 
 export interface FetchRequest {
@@ -16,6 +21,7 @@ export interface FetchRequest {
   navTimeoutMs: number;
   manualTimeoutMs: number;
   download?: boolean;
+  interactive?: boolean;
   downloadDir: string;
   browser: BrowserSingleton;
   queue: FifoQueue;
@@ -72,8 +78,19 @@ async function runOne(req: FetchRequest): Promise<FetchResult> {
       };
     }
 
+    if (req.interactive === true) {
+      const html = await handleInteractive(page, req);
+      return {
+        url: req.url,
+        finalUrl: page.url(),
+        body: extractContent(html, req.format, req.url),
+        durationMs: Date.now() - t0,
+      };
+    }
+
     await maybeWaitForSelector(page, req);
-    const html = await handleCaptchaIfPresent(page, status, req);
+    let html = await handleCaptchaIfPresent(page, status, req);
+    html = await handleLoginWallIfPresent(page, status, req, html);
     const body = extractContent(html, req.format, req.url);
     return {
       url: req.url,
@@ -113,6 +130,62 @@ async function maybeWaitForSelector(page: Page, req: FetchRequest): Promise<void
     await page.waitForSelector(req.waitFor, { timeout: req.navTimeoutMs });
   } catch {
     logger.warn('wait_for selector did not appear', { selector: req.waitFor });
+  }
+}
+
+async function handleInteractive(page: Page, req: FetchRequest): Promise<string> {
+  logger.info('interactive flag set; surfacing window for manual interaction', {
+    url: req.url,
+  });
+  await req.browser.unminimize(page);
+  await page.bringToFront();
+  const { html } = await waitForManualInteraction(page, { timeoutMs: req.manualTimeoutMs });
+  return html;
+}
+
+async function handleLoginWallIfPresent(
+  page: Page,
+  status: number,
+  req: FetchRequest,
+  currentHtml: string,
+): Promise<string> {
+  const doc = new JSDOM(currentHtml).window.document;
+  const detection = detectLoginWall(doc, status, page.url(), req.url);
+  if (!detection.detected) return currentHtml;
+
+  logger.info('login wall detected; surfacing window for manual login', {
+    url: req.url,
+    finalUrl: page.url(),
+    provider: detection.provider,
+  });
+  await req.browser.unminimize(page);
+  await page.bringToFront();
+
+  const { html, reason } = await waitForManualInteraction(page, {
+    timeoutMs: req.manualTimeoutMs,
+    isResolved: (url, resolvedHtml) =>
+      sameHost(url, req.url) &&
+      !detectLoginWall(new JSDOM(resolvedHtml).window.document, 200, url, req.url).detected,
+  });
+
+  // Auto-resolved but the OAuth flow may have landed on a different path of the
+  // requested host — re-navigate to the originally requested URL for content.
+  if (reason === 'resolved' && sameHost(page.url(), req.url) && page.url() !== req.url) {
+    try {
+      await page.goto(req.url, { waitUntil: 'networkidle', timeout: req.navTimeoutMs });
+      return await page.content();
+    } catch {
+      return html;
+    }
+  }
+  return html;
+}
+
+function sameHost(a: string, b: string): boolean {
+  try {
+    return new URL(a).host.toLowerCase() === new URL(b).host.toLowerCase();
+  } catch {
+    return false;
   }
 }
 
