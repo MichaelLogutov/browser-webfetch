@@ -68,3 +68,92 @@ export async function waitForManualResolution(
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
+
+export type InteractionEndReason = 'closed' | 'resolved';
+
+export interface ManualInteractionOptions {
+  timeoutMs: number;
+  // Optional auto-resolve predicate, evaluated against the current URL and the
+  // freshly loaded HTML on each load event. Used by the auto login-wall flow;
+  // omitted by the forced `interactive` flow (which only ends on tab close).
+  isResolved?: (url: string, html: string) => boolean;
+}
+
+export interface ManualInteractionResult {
+  html: string;
+  reason: InteractionEndReason;
+}
+
+/**
+ * Surface-and-wait for manual interaction (login, etc.). No DOM overlay is
+ * injected. Content is snapshotted on every `load`/`domcontentloaded` (no
+ * polling); the wait ends when the user closes the tab, when `isResolved`
+ * becomes true, or — by throwing MANUAL_TIMEOUT — when `timeoutMs` elapses.
+ * Returns a live read if the page is still open, else the last snapshot.
+ */
+export function waitForManualInteraction(
+  page: Page,
+  opts: ManualInteractionOptions,
+): Promise<ManualInteractionResult> {
+  return new Promise<ManualInteractionResult>((resolve, reject) => {
+    let settled = false;
+    let lastSnapshot = '';
+    let haveLoadSnapshot = false;
+
+    const onLoad = (): void => {
+      page
+        .content()
+        .then((html) => {
+          lastSnapshot = html;
+          haveLoadSnapshot = true;
+          if (opts.isResolved && opts.isResolved(page.url(), html)) finish('resolved', html);
+        })
+        .catch(() => undefined);
+    };
+    const onClose = (): void => finish('closed', lastSnapshot);
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new BwfError(ErrorCode.MANUAL_TIMEOUT, manualTimeoutMessage(opts.timeoutMs)));
+    }, opts.timeoutMs);
+
+    function finish(reason: InteractionEndReason, html: string): void {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve({ html, reason });
+    }
+    function cleanup(): void {
+      clearTimeout(timer);
+      page.off('load', onLoad);
+      page.off('domcontentloaded', onLoad);
+      page.off('close', onClose);
+    }
+
+    // Attach listeners synchronously so an early load/close is never missed.
+    page.on('load', onLoad);
+    page.on('domcontentloaded', onLoad);
+    page.on('close', onClose);
+
+    // Seed an initial snapshot, but don't clobber one a load event already set.
+    page
+      .content()
+      .then((html) => {
+        if (!haveLoadSnapshot) lastSnapshot = html;
+      })
+      .catch(() => undefined);
+  });
+}
+
+function manualTimeoutMessage(timeoutMs: number): string {
+  const secs = Math.round(timeoutMs / 1000);
+  return (
+    `Timed out after ${secs}s waiting for the user to finish in the browser window. ` +
+    'This almost always means the user did not notice the window or stepped away — ' +
+    'it is NOT a tool or website failure. A Chromium window was opened for the user ' +
+    'to log in / interact. Ask the user to complete it in that window, then call ' +
+    'browser_fetch again (optionally with a larger manual_timeout). Do not report ' +
+    'this as something to debug.'
+  );
+}
