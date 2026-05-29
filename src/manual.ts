@@ -99,8 +99,24 @@ export function waitForManualInteraction(
     let settled = false;
     let lastSnapshot = '';
     let haveLoadSnapshot = false;
+    let timer: NodeJS.Timeout;
+
+    // `timeoutMs` is an INACTIVITY window, not an absolute deadline: every
+    // navigation (a clear sign the user is mid-flow, e.g. stepping through a
+    // login) re-arms it, so an actively-working user is never cut off. It fires
+    // only after `timeoutMs` of no navigation (the user walked away).
+    const armTimer = (): void => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new BwfError(ErrorCode.MANUAL_TIMEOUT, manualTimeoutMessage(opts.timeoutMs)));
+      }, opts.timeoutMs);
+    };
 
     const onLoad = (): void => {
+      armTimer();
       page
         .content()
         .then((html) => {
@@ -111,12 +127,6 @@ export function waitForManualInteraction(
         .catch(() => undefined);
     };
     const onClose = (): void => finish('closed', lastSnapshot);
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(new BwfError(ErrorCode.MANUAL_TIMEOUT, manualTimeoutMessage(opts.timeoutMs)));
-    }, opts.timeoutMs);
 
     function finish(reason: InteractionEndReason, html: string): void {
       if (settled) return;
@@ -135,6 +145,7 @@ export function waitForManualInteraction(
     page.on('load', onLoad);
     page.on('domcontentloaded', onLoad);
     page.on('close', onClose);
+    armTimer();
 
     // Seed an initial snapshot, but don't clobber one a load event already set.
     page
@@ -149,7 +160,7 @@ export function waitForManualInteraction(
 function manualTimeoutMessage(timeoutMs: number): string {
   const secs = Math.round(timeoutMs / 1000);
   return (
-    `Timed out after ${secs}s waiting for the user to finish in the browser window. ` +
+    `Timed out after ${secs}s of inactivity in the browser window. ` +
     'This almost always means the user did not notice the window or stepped away — ' +
     'it is NOT a tool or website failure. A Chromium window was opened for the user ' +
     'to log in / interact. Ask the user to complete it in that window, then call ' +

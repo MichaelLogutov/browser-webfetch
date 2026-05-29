@@ -63,6 +63,22 @@ describe('waitForManualInteraction', () => {
     expect(res.html).toContain('panel');
   });
 
+  it('treats the timeout as inactivity — a load event resets the deadline', async () => {
+    const page = new FakePage();
+    const p = waitForManualInteraction(page.asPage(), { timeoutMs: 100 });
+    // Activity (navigation) at t=60ms resets the 100ms deadline to ~160ms.
+    await new Promise((r) => setTimeout(r, 60));
+    page.content_ = '<html><body>still going</body></html>';
+    page.emit('load');
+    // At t=120ms we are past the ORIGINAL 100ms deadline; without reset this
+    // would already have rejected. Close now → should resolve, not time out.
+    await new Promise((r) => setTimeout(r, 60));
+    page.emit('close');
+    const res = await p;
+    expect(res.reason).toBe('closed');
+    expect(res.html).toContain('still going');
+  });
+
   it('throws MANUAL_TIMEOUT with an instructive message on timeout', async () => {
     const page = new FakePage();
     await expect(

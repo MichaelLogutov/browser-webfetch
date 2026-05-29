@@ -146,10 +146,11 @@ automatically.
 
 You can also force this: pass `interactive: true` (MCP) or `--interactive` (CLI).
 The window is surfaced and the tool waits until you **close the tab**, then
-returns whatever was last loaded. If you don't act within `manual_timeout`
-(default 300s) the call fails with `MANUAL_TIMEOUT` and a message telling the
-agent the user likely didn't notice / stepped away, so it should retry rather
-than treat it as a failure.
+returns whatever was last loaded. `manual_timeout` (default 300s) is an
+**inactivity** window — each page navigation re-arms it, so a multi-step login
+won't cut you off; it only fires after `manual_timeout` of no navigation (you
+walked away), failing with `MANUAL_TIMEOUT` and a message telling the agent to
+retry rather than treat it as a failure.
 
 ## Troubleshooting
 
