@@ -68,7 +68,9 @@ Flags:
 - `--download-dir <path>` — override download directory (also via `BROWSER_WEBFETCH_DOWNLOAD_DIR` env var)
 - `--show` — keep the browser window visible (default: starts minimized; restores automatically when a captcha needs to be solved)
 
-Exit codes: `0` success, `1` internal, `2` navigation, `3` manual timeout, `4` queue timeout, `5` invalid args.
+Environment variables: `BROWSER_WEBFETCH_PROFILE` (profile dir), `BROWSER_WEBFETCH_DOWNLOAD_DIR` (download dir), `BROWSER_WEBFETCH_LOG_LEVEL` (`debug|info|warn|error`), `BROWSER_WEBFETCH_RECLAIM=1` (opt-in: kill stale Chromium that holds the persistent profile after a crash — off by default; see [Troubleshooting](#browser-launches-but-immediately-exits-target-page-context-or-browser-has-been-closed)).
+
+Exit codes: `0` success, `1` internal, `2` navigation, `3` manual timeout, `4` queue timeout, `5` invalid args, `6` launch failed.
 
 ## MCP usage
 
@@ -150,10 +152,29 @@ npx playwright-core install chromium
 
 ### Browser launches but immediately exits ("Target page, context or browser has been closed")
 
-Chrome spawned, was given a PID, then disconnected before browser-webfetch could attach. The error is generic at the playwright layer; the actual cause is one of these (most likely first):
+Chrome spawned, was given a PID, then disconnected before browser-webfetch could attach. The most common cause is a **stale Chromium still holding the persistent profile**: an orphan from a previous run that was hard-killed (the MCP host restarted/killed the server, the terminal was closed, a crash) before the browser tree was torn down. On Windows a dead parent does not cascade-kill its children, and playwright skips its own `taskkill` when the main process exited on its own — so the helpers keep the profile's `--user-data-dir` locked. The next launch then hands off to that orphan via the Windows process-singleton ("Opening in existing browser session.") and exits before the DevTools pipe comes up.
 
-1. **Antivirus blocking Chrome's helper processes**. Kaspersky, ESET, Norton, and similar HIPS-style products often kill `chrome.exe` subprocesses when launched from a non-`Program Files` path. Add the Chromium folder (e.g. `%LOCALAPPDATA%\ms-playwright`) to your AV's process / file exclusions.
-2. **Corrupted profile from previous failed launches**. Each failed launch can leave crash state in the profile dir; subsequent launches inherit the wreckage and keep crashing. Move the profile out of the way and let a fresh one be created:
+**browser-webfetch now recovers from this automatically.** It detects a locked profile *natively* (no child process) and falls back to a throwaway temporary profile, so the fetch still succeeds. You'll see a one-line `WARN ... persistent profile is locked` / `falling back to a temporary throwaway profile` instead of a hard failure.
+
+The only downside of the fallback is that the **throwaway profile has no saved logins/cookies** for that run. To reuse the persistent profile, clear the orphans (one of):
+
+- **Kill the orphans yourself** (run this PowerShell *in your terminal* — that's an interactive launch, unaffected by AV "script → PowerShell" rules):
+  ```powershell
+  Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
+    Where-Object { $_.CommandLine -like '*ms-playwright*' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+  ```
+  …or just reboot.
+- **Let browser-webfetch do it** — set `BROWSER_WEBFETCH_RECLAIM=1` and it will kill the orphans holding *its* profile and reuse it. This is **off by default** because it shells out to PowerShell (the only way to match Chromium by `--user-data-dir`), and some endpoint-security suites — notably **Kaspersky Adaptive Anomaly Control** — block "Windows PowerShell launched from a script" and will pop an alert while the reclaim quietly no-ops. Leave it off on such machines; the automatic throwaway-profile fallback already keeps things working.
+
+If even the throwaway profile fails to launch, the cause is environmental and browser-webfetch exits with code 6, printing this checklist to stderr:
+
+1. **Antivirus blocking Chrome's helper processes or the DevTools pipe**. Kaspersky, ESET, Norton, and similar HIPS-style products often interfere with `chrome.exe` subprocesses launched from a non-`Program Files` path. Add the Chromium folder (e.g. `%LOCALAPPDATA%\ms-playwright`) to your AV's process / file exclusions (or trusted-applications list).
+2. **Chromium install incomplete**. Force a reinstall:
+   ```bash
+   npx playwright-core install chromium --force
+   ```
+3. **Corrupted profile**. Move it aside so a fresh one is created:
    ```powershell
    # Windows
    Rename-Item "$env:LOCALAPPDATA\browser-webfetch\Data\profile" profile.bak
@@ -163,12 +184,6 @@ Chrome spawned, was given a PID, then disconnected before browser-webfetch could
    mv ~/Library/Application\ Support/browser-webfetch/profile profile.bak    # macOS
    mv ~/.local/share/browser-webfetch/profile profile.bak                     # Linux
    ```
-3. **Chromium install incomplete**. Force a reinstall:
-   ```bash
-   npx playwright-core install chromium --force
-   ```
-
-browser-webfetch exits with code 6 and prints this list to stderr when it detects the symptom, so you can follow the same checklist without leaving the terminal.
 
 ## Profile location
 
