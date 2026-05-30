@@ -5,7 +5,15 @@ import { dirname, join } from 'node:path';
 import { sweepOldDownloads } from './download.js';
 import { logger } from './logger.js';
 import { ensureChromium } from './bootstrap.js';
-import { isProfileLocked, reclaimEnabled, reclaimProfile, waitForProfileFree } from './reclaim.js';
+import {
+  crashReportCount,
+  deleteProfile,
+  isProfileLocked,
+  reclaimEnabled,
+  reclaimProfile,
+  waitForNewCrashReport,
+  waitForProfileFree,
+} from './reclaim.js';
 import { BwfError, ErrorCode, buildLaunchFailureMessage } from './errors.js';
 
 export interface BrowserSingletonOptions {
@@ -212,15 +220,65 @@ export class BrowserSingleton {
       }
     }
 
+    const crashesBefore = crashReportCount(profileDir);
     try {
       return await this.openPersistentContext(profileDir, args);
     } catch (err) {
-      // A disconnect even though the profile was free points at something
-      // environmental (AV breaking the DevTools pipe, a corrupted profile, a
-      // race). A throwaway profile sidesteps profile corruption and lets the
-      // fetch proceed; if it still fails the cause is surfaced with full help.
       if (!isProfileDisconnectError(err)) throw err;
+
+      // Tell a CORRUPT profile (chrome crashed → a new Crashpad dump appears)
+      // from a transport/AV failure (chrome did not crash → no dump). Only a
+      // crash warrants resetting the profile; otherwise fall back to a throwaway.
+      const crashed = await waitForNewCrashReport(profileDir, crashesBefore, 3_000);
+      if (crashed) {
+        const healed = await this.healCorruptProfile(args);
+        if (healed) return healed;
+        // A fresh profile crashed too → the cause is environmental, not the
+        // profile (broken Chromium / AV). Surface the full help message.
+        throw this.buildLaunchFailedError(err);
+      }
       return this.launchEphemeralFallback(args, err);
+    }
+  }
+
+  /**
+   * Confirm via A/B that the persistent profile — not the environment — is at
+   * fault: launch a throwaway profile. If that works, the persistent profile is
+   * corrupt, so delete it and relaunch fresh (logins persist again going
+   * forward). Returns the new context, or null if a fresh profile ALSO crashes
+   * (environmental — the caller surfaces the help message).
+   */
+  private async healCorruptProfile(args: string[]): Promise<BrowserContext | null> {
+    const profileDir = this.opts.profileDir;
+    const probeDir = mkdtempSync(join(tmpdir(), 'bwf-probe-'));
+    let freshWorks = false;
+    try {
+      const probe = await this.openPersistentContext(probeDir, args);
+      freshWorks = true;
+      await probe.close().catch(() => undefined);
+    } catch (probeErr) {
+      if (!isProfileDisconnectError(probeErr)) {
+        rmSync(probeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+        throw probeErr;
+      }
+    } finally {
+      rmSync(probeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    }
+
+    if (!freshWorks) return null;
+
+    logger.warn(
+      'persistent profile is corrupted (chrome crashed launching it, but a fresh ' +
+        'profile works) — deleting and recreating it; saved logins are lost, log in again',
+      { profileDir },
+    );
+    deleteProfile(profileDir);
+    try {
+      return await this.openPersistentContext(profileDir, args);
+    } catch (reErr) {
+      // The recreated profile unexpectedly failed too (transient) → throwaway.
+      if (!isProfileDisconnectError(reErr)) throw reErr;
+      return this.launchEphemeralFallback(args, reErr);
     }
   }
 

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { closeSync, existsSync, openSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { logger } from './logger.js';
 
@@ -123,6 +123,46 @@ function findChromePidsHoldingProfile(profileDir: string): number[] {
     if (Number.isInteger(pid) && pid > 0) pids.push(pid);
   }
   return pids;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Corrupt-profile detection.
+//
+// A corrupted persistent profile makes chrome CRASH during launch — observed as
+// a launch that disconnects AND writes a fresh Crashpad minidump (chrome's
+// stderr carries no logged error; the crash is caught silently by Crashpad). A
+// transport/AV failure or an orphan-singleton handoff disconnects too, but does
+// NOT crash chrome, so no new dump appears. That delta is the readable signal
+// the caller uses to tell "corrupt profile" from "environment/transport".
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Number of Crashpad minidumps currently in the profile (0 if none / no dir). */
+export function crashReportCount(profileDir: string): number {
+  try {
+    return readdirSync(join(profileDir, 'Crashpad', 'reports')).filter((f) => f.endsWith('.dmp'))
+      .length;
+  } catch {
+    return 0;
+  }
+}
+
+/** Poll until the dump count exceeds `since` (chrome crashed) or the deadline. */
+export async function waitForNewCrashReport(
+  profileDir: string,
+  since: number,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (crashReportCount(profileDir) > since) return true;
+    if (Date.now() >= deadline) return false;
+    await delay(200);
+  }
+}
+
+/** Hard-delete the profile directory (it is browser-webfetch's own, dedicated). */
+export function deleteProfile(profileDir: string): void {
+  rmSync(profileDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
 
 function delay(ms: number): Promise<void> {
