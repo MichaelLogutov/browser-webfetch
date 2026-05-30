@@ -43,7 +43,7 @@
     "prepare": "npm run build"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
@@ -58,7 +58,7 @@
   },
   "devDependencies": {
     "@types/jsdom": "^28.0.3",
-    "@types/node": "^25.9.0",
+    "@types/node": "^24.0.0",
     "@types/turndown": "^5.0.5",
     "tsx": "^4.19.0",
     "typescript": "^6.0.3",

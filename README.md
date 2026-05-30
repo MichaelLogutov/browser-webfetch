@@ -19,7 +19,7 @@ If a captcha is detected, the Chromium window surfaces so you can solve it inter
 
 ## Install
 
-Requirements: Node.js 20+.
+Requirements: Node.js 24 LTS or newer.
 
 ### From npm (recommended)
 
@@ -159,7 +159,7 @@ retry rather than treat it as a failure.
 The first invocation of `browser-webfetch` (CLI or MCP) downloads Chromium (~150 MB) into `%LOCALAPPDATA%\ms-playwright` (or the platform equivalent). If that step fails or hangs, check:
 
 - **Antivirus**: Windows Defender real-time scanning of freshly-extracted Chromium binaries can take several minutes. If the progress bar stays at 100% without finishing, **wait** rather than Ctrl+C — extraction is usually still running. browser-webfetch falls back to PowerShell `Expand-Archive` after a 4-minute hang.
-- **Node version**: `playwright-core@1.52` is tested up to Node 22 LTS. Very recent Node releases (26+, pre-release builds) may silently break the install step. Switching to Node 22 LTS or Node 24 LTS usually fixes it.
+- **Node version**: browser-webfetch targets **Node 24 LTS** (the minimum). Very recent odd/pre-release Node lines (25, 26, nightly) can silently break the Chromium install step (a `playwright-core@1.52` / yauzl interaction). If the install hangs on such a build, switch to Node 24 LTS.
 - **Disk space / permissions**: ensure `%LOCALAPPDATA%\ms-playwright` is writable and has ~500 MB free.
 
 To run the download manually (e.g. on a machine that won't have internet at first run):
