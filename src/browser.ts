@@ -32,6 +32,11 @@ export class BrowserSingleton {
   private activeOps = 0;
   private didSweep = false;
   private ephemeralProfileDir: string | null = null;
+  // A free, reusable tab kept open between fetches. Seeded with the context's
+  // launch tab so the first fetch reuses it instead of opening a second tab,
+  // and re-parked on release so the persistent browser never drops to zero
+  // pages (which would close it and force a relaunch). null while in use.
+  private parkedPage: Page | null = null;
 
   constructor(private readonly opts: BrowserSingletonOptions) {}
 
@@ -49,14 +54,53 @@ export class BrowserSingleton {
     const ctx = await this.ensureContext();
     this.beginActivity();
     try {
-      return await ctx.newPage();
+      return await this.reuseOrOpenTab(ctx);
     } catch (err) {
       this.endActivity();
       throw err;
     }
   }
 
+  /**
+   * Reuse the single parked tab when one is free; otherwise (first use of a
+   * fresh context, or a concurrent acquire) open a new one. The parked tab is
+   * reset to about:blank first so a prior fetch's leftover navigation — a loaded
+   * page or, crucially, a lingering error-page commit from a failed goto — can't
+   * interrupt the caller's own goto.
+   */
+  private async reuseOrOpenTab(ctx: BrowserContext): Promise<Page> {
+    const parked = this.parkedPage;
+    this.parkedPage = null;
+    if (!parked || parked.isClosed()) return ctx.newPage();
+    try {
+      await parked.goto('about:blank', { waitUntil: 'commit' });
+      return parked;
+    } catch {
+      // The parked tab is wedged — open a fresh one and discard it. Create the
+      // new tab first so the persistent browser never drops to zero pages.
+      const fresh = await ctx.newPage();
+      await parked.close().catch(() => undefined);
+      return fresh;
+    }
+  }
+
   async unminimize(page: Page): Promise<void> {
+    await this.applyWindowBounds(page, { windowState: 'normal' });
+    // A minimized window was launched off-screen to avoid a flash; restoring it
+    // to 'normal' brings it back at that off-screen position, so move it onto
+    // the visible desktop. (Two calls: bounds can't be set while minimized.)
+    if (this.opts.startMinimized !== false) {
+      await this.applyWindowBounds(page, this.visibleBounds());
+    }
+  }
+
+  private async minimize(page: Page): Promise<void> {
+    await this.applyWindowBounds(page, { windowState: 'minimized' });
+  }
+
+  // --start-minimized is not a real Chromium switch (only --start-maximized /
+  // --start-fullscreen exist), so window placement is driven over CDP instead.
+  private async applyWindowBounds(page: Page, bounds: Record<string, unknown>): Promise<void> {
     try {
       const cdp = await page.context().newCDPSession(page);
       try {
@@ -66,19 +110,31 @@ export class BrowserSingleton {
         };
         await cdp.send('Browser.setWindowBounds', {
           windowId: win.windowId,
-          bounds: { windowState: 'normal' },
+          bounds,
         });
       } finally {
         await cdp.detach().catch(() => undefined);
       }
     } catch (err) {
-      logger.warn('unminimize failed', { err: err instanceof Error ? err.message : String(err) });
+      logger.warn('set window bounds failed', {
+        bounds,
+        err: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
   async releaseTab(page: Page): Promise<void> {
     try {
-      if (!page.isClosed()) await page.close();
+      if (page.isClosed()) return;
+      // Keep one tab alive and reusable instead of closing the last page (which
+      // would close the persistent browser and force a relaunch). Park this page
+      // if no parked tab is held; any extra tab (concurrent overflow) is closed.
+      // The next fetch's goto overwrites the parked tab's leftover content.
+      if (this.parkedPage && !this.parkedPage.isClosed()) {
+        await page.close();
+        return;
+      }
+      this.parkedPage = page;
     } finally {
       this.endActivity();
     }
@@ -104,7 +160,9 @@ export class BrowserSingleton {
       if (this.context) {
         const ctx = this.context;
         this.context = null;
-        await ctx.close();
+        // The browser may already be gone — e.g. in interactive mode the user
+        // closed the single tab, which exits the persistent browser. Tolerate it.
+        await ctx.close().catch(() => undefined);
       }
     } finally {
       this.cleanupEphemeralProfile();
@@ -147,6 +205,13 @@ export class BrowserSingleton {
     });
 
     const ctx = await this.launchWithRecovery(args);
+    // Reuse the context's launch tab for the first fetch instead of opening a
+    // second tab beside it.
+    this.parkedPage = ctx.pages()[0] ?? null;
+
+    // Minimize via CDP (the --start-minimized switch is a no-op). A login,
+    // captcha, or interactive step restores the window when it needs attention.
+    if (startMinimized && this.parkedPage) await this.minimize(this.parkedPage);
 
     // Real Chrome exposes `window.chrome.runtime` as an object; non-extension
     // Chromium builds leave it undefined, which bot-detection scripts flag.
@@ -158,6 +223,7 @@ export class BrowserSingleton {
 
     ctx.on('close', () => {
       this.context = null;
+      this.parkedPage = null;
     });
 
     if (!this.didSweep && this.opts.downloadDir) {
@@ -168,16 +234,23 @@ export class BrowserSingleton {
     return ctx;
   }
 
+  // Far off any monitor. When starting minimized we launch the window here so it
+  // is never visible before CDP minimizes it (the window is shown a frame or two
+  // before we can act, and --start-minimized is a no-op) — avoiding a flash.
+  private static readonly OFFSCREEN = { x: -32000, y: -32000 };
+
+  private visibleBounds(): { left: number; top: number; width: number; height: number } {
+    const pos = this.opts.windowPosition ?? { x: 100, y: 100 };
+    const size = this.opts.windowSize ?? { width: 1280, height: 900 };
+    return { left: pos.x, top: pos.y, width: size.width, height: size.height };
+  }
+
   private buildLaunchArgs(startMinimized: boolean): string[] {
     const windowArgs: string[] = startMinimized
-      ? ['--start-minimized']
+      ? [`--window-position=${BrowserSingleton.OFFSCREEN.x},${BrowserSingleton.OFFSCREEN.y}`]
       : (() => {
-          const pos = this.opts.windowPosition ?? { x: 100, y: 100 };
-          const size = this.opts.windowSize ?? { width: 1280, height: 900 };
-          return [
-            `--window-position=${pos.x},${pos.y}`,
-            `--window-size=${size.width},${size.height}`,
-          ];
+          const b = this.visibleBounds();
+          return [`--window-position=${b.left},${b.top}`, `--window-size=${b.width},${b.height}`];
         })();
 
     // Disables the AutomationControlled blink feature that otherwise sets
