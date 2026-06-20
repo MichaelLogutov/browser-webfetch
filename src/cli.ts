@@ -28,7 +28,9 @@ export async function runCli(argv: string[]): Promise<number> {
 
   cli
     .command('<url>', 'Fetch a URL through Chromium')
-    .option('--format <format>', 'markdown|html|text', { default: 'markdown' })
+    .option('--format <format>', 'markdown|html|text (markdown/text are reader-mode and may omit tables/attributes; html is the full raw DOM)', {
+      default: 'markdown',
+    })
     .option('--wait-for <selector>', 'CSS selector to wait for')
     .option('--nav-timeout <seconds>', 'Page navigation timeout', { default: 30 })
     .option('--manual-timeout <seconds>', 'Captcha manual-solve timeout', { default: 300 })

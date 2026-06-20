@@ -56,7 +56,7 @@ A Chromium window opens. If the site shows a captcha, solve it in that window �
 
 Flags:
 
-- `--format markdown|html|text` (default: `markdown`)
+- `--format markdown|html|text` (default: `markdown`) — `markdown` and `text` are a reader-mode extract (Mozilla Readability) and may omit secondary structured content (spec/ingredient tables, product attributes, tabs, collapsed accordions); use `html` for the full raw rendered DOM when data is missing.
 - `--wait-for <selector>`
 - `--nav-timeout <seconds>` (default: 30)
 - `--manual-timeout <seconds>` (default: 300)
@@ -134,6 +134,8 @@ Append this paragraph to your global `~/.claude/CLAUDE.md` (create the file if i
 Once both steps are done, Claude can call the `browser_fetch` tool with `{ url, format?, wait_for?, manual_timeout?, download? }`.
 
 Pass `download: true` for non-HTML URLs (PDF, image, binary) — the tool saves the bytes to disk and returns the absolute file path. If `download` is omitted and the URL turns out to be non-HTML, the tool auto-downloads and returns the path.
+
+The default `markdown` output (and `text`) is a **reader-mode** extract via Mozilla Readability: it strips navigation and boilerplate, and on non-article pages it may also drop secondary structured sections such as spec/ingredient tables, product attributes, tab panels and collapsed accordions. If the rendered page clearly contains data that is missing from the `markdown`/`text` output, refetch the same `url` with `format: "html"` to get the full raw rendered DOM and read the value from there (`html` can be large for content-heavy pages, so search it for the part you need).
 
 ## Login / SSO walls
 
