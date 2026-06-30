@@ -89,8 +89,12 @@ async function runOne(req: FetchRequest): Promise<FetchResult> {
     }
 
     await maybeWaitForSelector(page, req);
-    let html = await handleCaptchaIfPresent(page, status, req);
-    html = await handleLoginWallIfPresent(page, status, req, html);
+    const cap = await handleCaptchaIfPresent(page, status, req);
+    // A handled anti-bot wall has navigated us to real content, so the original
+    // status (e.g. the 401 a Qrator captcha is served with) is stale — passing
+    // it on would re-trigger the login-wall flow on the now-clean page.
+    const loginStatus = cap.handled ? 200 : status;
+    const html = await handleLoginWallIfPresent(page, loginStatus, req, cap.html);
     const body = extractContent(html, req.format, req.url);
     return {
       url: req.url,
@@ -189,21 +193,34 @@ function sameHost(a: string, b: string): boolean {
   }
 }
 
+interface CaptchaOutcome {
+  html: string;
+  // True once we have entered the manual-resolution flow (the wall was real and
+  // surfaced). Lets the caller treat the page as past the wall regardless of
+  // whether it cleared automatically or the user signalled done.
+  handled: boolean;
+}
+
 async function handleCaptchaIfPresent(
   page: Page,
   status: number,
   req: FetchRequest,
-): Promise<string> {
+): Promise<CaptchaOutcome> {
   const initialHtml = await page.content();
   const initialDom = new JSDOM(initialHtml).window.document;
   const detection = detectCaptchaInDom(initialDom, status);
-  if (!detection.detected) return initialHtml;
+  if (!detection.detected) return { html: initialHtml, handled: false };
 
-  if (readableContentLength(initialDom) > 500) {
+  // Weak (heuristic) detections are gated by a content guard so a real article
+  // that coincidentally carries captcha-ish markers is not mistaken for a wall.
+  // Strong detections (dedicated captcha assets / vendor block pages) are
+  // unambiguous, so they surface the window regardless of how much explanatory
+  // boilerplate the interstitial contains.
+  if (!detection.strong && readableContentLength(initialDom) > 500) {
     logger.info('captcha markers but page has substantial content; skipping manual wait', {
       type: detection.type,
     });
-    return initialHtml;
+    return { html: initialHtml, handled: false };
   }
 
   logger.info('captcha detected; waiting for manual resolution', { type: detection.type });
@@ -211,20 +228,42 @@ async function handleCaptchaIfPresent(
   await page.bringToFront();
   await injectOverlay(page);
 
+  // Solving a captcha (or clicking the interstitial's own refresh/submit)
+  // reloads the page, which wipes our injected overlay — re-add it on every load
+  // so the "✓ Готово" fallback button survives across reloads.
+  const reinjectOverlay = (): void => {
+    void injectOverlay(page).catch(() => undefined);
+  };
+  page.on('load', reinjectOverlay);
   try {
     await waitForManualResolution(page, {
       timeoutMs: req.manualTimeoutMs,
       pollIntervalMs: 1000,
-      isCaptchaGone: async () => {
-        const html = await page.content();
-        const doc = new JSDOM(html).window.document;
-        return !detectCaptchaInDom(doc, 200).detected;
-      },
+      isCaptchaGone: () => captchaCleared(page),
     });
     await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {});
   } finally {
+    page.off('load', reinjectOverlay);
     await removeOverlay(page).catch(() => {});
   }
   // After resolution, re-fetch the page content since the page likely changed.
-  return await page.content();
+  return { html: await page.content(), handled: true };
+}
+
+// Whether the captcha/wall is gone, evaluated defensively. The user's solve or
+// the interstitial's own refresh reloads the page; reading content mid-reload
+// throws ("page is navigating") and a half-loaded document can momentarily lack
+// the captcha markers. So we only judge a fully-settled page and treat any
+// navigation hiccup as "still here, keep waiting" — never a false "resolved"
+// that would tear the window down before the user finishes.
+async function captchaCleared(page: Page): Promise<boolean> {
+  try {
+    const ready = await page.evaluate(() => document.readyState).catch(() => 'loading');
+    if (ready !== 'complete') return false;
+    const html = await page.content();
+    const doc = new JSDOM(html).window.document;
+    return !detectCaptchaInDom(doc, 200).detected;
+  } catch {
+    return false;
+  }
 }

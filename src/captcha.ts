@@ -3,15 +3,58 @@ export type CaptchaType =
   | 'hcaptcha'
   | 'recaptcha'
   | 'datadome'
+  | 'servicepipe'
+  | 'qrator'
+  | 'soft_block'
   | 'generic_wall'
   | 'http_403';
 
 export interface CaptchaDetection {
   detected: boolean;
   type?: CaptchaType;
+  // Strong = an unambiguous anti-bot signature that cannot plausibly appear on
+  // a real content page (dedicated captcha-widget assets, vendor-specific block
+  // titles). Strong detections bypass the readable-content guard in fetch.ts;
+  // weak ones (coincidental title/text heuristics — e.g. a real article titled
+  // "Just a moment...") stay gated by it. Mirrors detectLoginWall's
+  // strong-unconditional vs weak-content-gated split.
+  strong?: boolean;
 }
 
+// Servicepipe (a Russian anti-DDoS/WAF) serves its captcha from dedicated asset
+// paths and mounts it on a fixed root node — neither of which a real page would
+// carry. The visible page is mostly "why you're blocked" boilerplate, so it
+// routinely trips the >500-char content guard; hence it must be strong.
+const SERVICEPIPE_SELECTOR =
+  '[href*="sp_rotated_captcha"], [src*="sp_rotated_captcha"], #captcha_root.captcha-root';
+
+// Qrator (a Russian anti-DDoS/WAF) serves its "Введите символы с картинки"
+// captcha from the dedicated /__qrator/ auth path and mounts it on
+// #wrapper-captcha. It is commonly returned with HTTP 401, which would
+// otherwise route it to the login-wall path (which auto-resolves and closes
+// the window). The asset path cannot appear on a real page, so it is strong.
+const QRATOR_SELECTOR =
+  '[src*="/__qrator/"], [src*="qauth"], #wrapper-captcha.captcha-page';
+
+// Soft-block / "access temporarily restricted" interstitials (e.g. petrovich's
+// own block page). No captcha to solve — surfacing the window lets the user
+// wait / retry / switch network. The phrasing is specific to block pages, so a
+// real article is very unlikely to match it.
+const SOFT_BLOCK_TITLE_RE =
+  /доступ\s+(?:временно\s+)?ограничен|access\s+(?:temporarily\s+)?(?:restricted|limited)/i;
+
 export function detectCaptchaInDom(doc: Document, httpStatus = 200): CaptchaDetection {
+  // Strong, status-independent signatures are checked first so a 403 (which the
+  // site may return for the very same captcha) does not down-rank them to the
+  // weak, content-gated http_403 type.
+  if (doc.querySelector(SERVICEPIPE_SELECTOR)) {
+    return { detected: true, type: 'servicepipe', strong: true };
+  }
+
+  if (doc.querySelector(QRATOR_SELECTOR)) {
+    return { detected: true, type: 'qrator', strong: true };
+  }
+
   if (httpStatus === 403 && doc.body && doc.documentElement) {
     return { detected: true, type: 'http_403' };
   }
@@ -40,6 +83,10 @@ export function detectCaptchaInDom(doc: Document, httpStatus = 200): CaptchaDete
 
   if (doc.querySelector('iframe[src*="datadome.co"]')) {
     return { detected: true, type: 'datadome' };
+  }
+
+  if (SOFT_BLOCK_TITLE_RE.test(title)) {
+    return { detected: true, type: 'soft_block', strong: true };
   }
 
   if (/access denied|attention required|verifying you are human/i.test(title)) {

@@ -1,0 +1,39 @@
+<!DOCTYPE html><html lang="ru"><head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="/favicon.ico">
+  <title></title>
+  <style>.captcha-page { display: flex; }</style>
+  <script src="/__qrator/qauth_utm_v2d_v9118.js"></script>
+</head>
+<body>
+  <div id="wrapper-captcha" class="captcha-page">
+    <main class="captcha-card">
+      <div class="captcha-card-inner">
+        <header class="captcha-header">
+          <h1 id="captcha-title" class="captcha-title">Пожалуйста, пройдите проверку.</h1>
+          <p class="captcha-ip">Ваш IP-адрес: 77.95.11.0</p>
+        </header>
+        <section class="captcha-image-group">
+          <div class="captcha-area">
+            <img id="captcha-img" src="data:,">
+          </div>
+          <button type="button">Обновить капчу</button>
+        </section>
+        <form class="captcha-form">
+          <label class="captcha-input-wrap">Введите символы с картинки
+            <input id="captcha-input" type="text">
+          </label>
+          <input id="captcha-token" type="hidden">
+          <button type="submit">Готово</button>
+        </form>
+      </div>
+    </main>
+  </div>
+  <script>
+    qauth_show_captcha = function (token, image) {
+      document.getElementById("captcha-img").setAttribute("src", image);
+      document.getElementById("captcha-token").value = token;
+    };
+  </script>
+</body></html>

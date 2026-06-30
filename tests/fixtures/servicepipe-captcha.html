@@ -1,0 +1,83 @@
+<!DOCTYPE html><html lang="en"><head>
+    <meta name="ROBOTS" content="NOINDEX, NOFOLLOW">
+    <meta charset="UTF-8">
+    <link href="./sp_rotated_captcha/js/style.css" rel="stylesheet">
+    <script language="JavaScript" type="text/javascript" src="./sp_rotated_captcha/js/captchaIntGen.js"></script>
+    <style>.box { margin: 117px 0; }</style>
+</head>
+<body>
+    <script>
+      function copyToClipboard(string) {
+        let report = { report: { datetime: "2026-06-22 11:04:24 +0000", ip: "77.95.11.0", id: "O4cgh94bbCg1" } };
+        string = JSON.stringify(report);
+      }
+    </script>
+      <div id="captcha-holder">
+<div id="captcha_root" class="captcha-root">
+    <div class="captcha-wrap">
+        <div class="box">
+            <div class="captcha-header">
+                <div class="captcha-header-text">
+                    Мы хотим убедиться, что имеем дело именно с вами, а не с ботом.
+                    <br> Пожалуйста, пройдите проверку, чтобы получить доступ к сайту.
+                </div>
+                <div class="captcha-header-info-box">
+                    <div>
+                        <div class="captcha-header-span">2026-06-22 11:04:24 +0000</div>
+                        <div class="captcha-header-label">Ваш IP:
+                            <span class="captcha-header-span"> 77.95.11.0</span>
+                        </div>
+                        <div class="captcha-header-label">ID запроса:
+                            <span class="captcha-header-span">O4cgh94bbCg1</span>
+                        </div>
+                    </div>
+                    <div>
+                        <button class="button-copy" onclick="copyToClipboard()"></button>
+                    </div>
+                </div>
+            </div>
+            <div class="captcha" id="id_captcha_loaded">
+                <div class="captcha-title">Разверните картинку горизонтально</div>
+                <div class="captcha-main">
+                    <div class="captcha-wrap">
+                        <div class="captcha-image" style="--size-img-margin: 30px">
+                            <div class="captcha-img" style="--size-img: 152px">
+                                <img src="./sp_rotated_captcha/get_image.php">
+                            </div>
+                            <div class="captcha-coordinate"></div>
+                            <div class="captcha-state"></div>
+                        </div>
+                    </div>
+                    <div class="captcha-control" style="--size-control: 275px">
+                        <div class="captcha-control-wrap"></div>
+                        <div class="captcha-control-button"><i></i></div>
+                    </div>
+                </div>
+                <div class="support-block">
+                    <div class="support-block-title">Зачем потребовалась эта проверка?</div>
+                    <div class="support-block-subtitle">Что-то в поведении вашего браузера привлекло наше внимание.</div>
+                    <div class="support-block-dsc">Возможные причины:</div>
+                    <div class="support-block-list">
+                        <div class="support-block-span">
+                            <span></span>
+                            Вы просматриваете страницы и кликаете со скоростью, намного превышающую ожидаемую от человека
+                        </div>
+                        <div class="support-block-span">
+                            <span></span>
+                            Что-то мешает работе javascript в вашем браузере
+                        </div>
+                        <div class="support-block-span">
+                            <span></span>
+                            Ваше поведение похоже на поведение автоматизированных систем
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div></div>
+<script language="JavaScript" type="text/javascript">
+   let myCaptcha = new Captcha();
+</script>
+<script language="JavaScript" type="text/javascript" src="./sp_rotated_captcha/js/bundle.js"></script>
+</body></html>
