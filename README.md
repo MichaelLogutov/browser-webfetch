@@ -5,7 +5,7 @@
 [![Node.js](https://img.shields.io/node/v/browser-webfetch.svg)](https://nodejs.org/)
 [![Publish](https://github.com/MichaelLogutov/browser-webfetch/actions/workflows/publish.yml/badge.svg)](https://github.com/MichaelLogutov/browser-webfetch/actions/workflows/publish.yml)
 
-A Node.js CLI and MCP server that fetches URLs through a real headed Chromium with stealth patches and a persistent profile.
+A Node.js CLI and MCP server that fetches URLs through a real headed browser (your locally-installed Google Chrome by default) with stealth patches and a persistent profile.
 
 Designed as a fallback for Claude Code's built-in `WebFetch` whenever the latter is blocked or returns something unusable:
 
@@ -27,7 +27,7 @@ Requirements: Node.js 24 LTS or newer.
 npm install -g browser-webfetch
 ```
 
-The install itself is just JavaScript and finishes in seconds. The first time you run the CLI (or the MCP server makes its first tool call), `browser-webfetch` downloads Chromium (~150 MB) via Playwright and extracts it into the OS user data dir. That step is one-time and takes 2-5 minutes — please don't interrupt it.
+The install itself is just JavaScript and finishes in seconds. By default the tool uses your installed Google Chrome (see [Browser](#browser)), so no browser download is needed. Only if you switch to the bundled `chromium` browser (or fall back to it because Chrome/Edge aren't installed) does `browser-webfetch` download Chromium (~150 MB) via Playwright into the OS user data dir on first use — a one-time step that takes 2-5 minutes; please don't interrupt it.
 
 ### From source (for development)
 
@@ -63,15 +63,30 @@ Flags:
 - `--queue-timeout <seconds>` (default: 30)
 - `--idle-timeout <seconds>` (default: 300)
 - `--profile <path>` (also via `BROWSER_WEBFETCH_PROFILE` env var)
+- `--browser chrome|msedge|chromium` (default: `chrome`; also via `BROWSER_WEBFETCH_BROWSER` env var) — see [Browser](#browser)
 - `--json` — emit `{ url, finalUrl, body, durationMs }` instead of bare content
 - `--download` — save raw bytes (PDF, image, binary) to disk and print the absolute path
 - `--download-dir <path>` — override download directory (also via `BROWSER_WEBFETCH_DOWNLOAD_DIR` env var)
 - `--interactive` — surface the window and wait for manual login/interaction, then return the last page content
 - `--show` — keep the browser window visible (default: starts minimized; restores automatically when a captcha needs to be solved)
 
-Environment variables: `BROWSER_WEBFETCH_PROFILE` (profile dir), `BROWSER_WEBFETCH_DOWNLOAD_DIR` (download dir), `BROWSER_WEBFETCH_LOG_LEVEL` (`debug|info|warn|error`), `BROWSER_WEBFETCH_RECLAIM=1` (opt-in: kill stale Chromium that holds the persistent profile after a crash — off by default; see [Troubleshooting](#browser-launches-but-immediately-exits-target-page-context-or-browser-has-been-closed)).
+Environment variables: `BROWSER_WEBFETCH_PROFILE` (profile dir), `BROWSER_WEBFETCH_BROWSER` (which browser to launch; see below), `BROWSER_WEBFETCH_DOWNLOAD_DIR` (download dir), `BROWSER_WEBFETCH_LOG_LEVEL` (`debug|info|warn|error`), `BROWSER_WEBFETCH_RECLAIM=1` (opt-in: kill stale Chromium that holds the persistent profile after a crash — off by default; see [Troubleshooting](#browser-launches-but-immediately-exits-target-page-context-or-browser-has-been-closed)).
 
 Exit codes: `0` success, `1` internal, `2` navigation, `3` manual timeout, `4` queue timeout, `5` invalid args, `6` launch failed.
+
+## Browser
+
+By default the tool launches your **locally-installed Google Chrome** (`browser: chrome`). Strict anti-bots — notably **Qrator** and DataDome — fingerprint the TLS/JA3 handshake and reject Playwright's bundled open-source Chromium even with stealth patches; the real Chrome binary uses the same trusted fingerprint as your everyday browser and passes. (rebrowser's CDP-leak patches still apply on top of the real binary.)
+
+| `browser` | What it launches | Trade-off |
+|-----------|------------------|-----------|
+| `chrome` (default) | Installed Google Chrome | Best at clearing anti-bots; requires Chrome installed |
+| `msedge` | Installed Microsoft Edge | Same idea, always present on Windows |
+| `chromium` | Bundled Chromium (self-contained, ~150 MB one-time download) | No system browser needed; more likely to be blocked by strict anti-bots |
+
+If the requested binary is not installed the tool falls back automatically (`chrome → msedge → chromium`), so a fetch still succeeds on machines without Chrome. Each browser keeps its **own profile** (a `chrome`/`msedge` subdir under the profile dir) so different builds never share — and corrupt — a profile. Set the default with `--browser` / `BROWSER_WEBFETCH_BROWSER`; the default (real Chrome) already clears most anti-bots, so you rarely need to override it — set `browser: "chromium"` for speed on simple sites, or `browser: "msedge"` if a site still blocks Chrome.
+
+> Note: driving a much newer system Chrome through the pinned `rebrowser-playwright` (Chromium 136) can emit non-fatal `ProtocolError` CDP warnings on stderr; the content is still returned. Use `chromium` if you prefer the version-matched bundled build for a site that isn't behind a strict anti-bot.
 
 ## MCP usage
 
@@ -131,7 +146,9 @@ Append this paragraph to your global `~/.claude/CLAUDE.md` (create the file if i
 
 ### Calling the tool
 
-Once both steps are done, Claude can call the `browser_fetch` tool with `{ url, format?, wait_for?, manual_timeout?, download? }`.
+Once both steps are done, Claude can call the `browser_fetch` tool with `{ url, format?, wait_for?, manual_timeout?, download?, interactive?, browser? }`.
+
+`browser` (`chrome` | `msedge` | `chromium`) overrides which browser to launch for that one call. The default (real Chrome) already clears most anti-bots, so you rarely need it — set `browser: "msedge"` if a site still blocks Chrome, or `browser: "chromium"` to force the faster self-contained build on a simple site. See [Browser](#browser).
 
 Pass `download: true` for non-HTML URLs (PDF, image, binary) — the tool saves the bytes to disk and returns the absolute file path. If `download` is omitted and the URL turns out to be non-HTML, the tool auto-downloads and returns the path.
 

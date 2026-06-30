@@ -9,19 +9,34 @@ import { FifoQueue } from './queue.js';
 import { fetchUrl } from './fetch.js';
 import { BwfError, ErrorCode } from './errors.js';
 import { resolveDownloadDir } from './download.js';
-import { resolveProfileDir } from './profile.js';
+import { resolveProfileDir, profileDirForChannel } from './profile.js';
+import { resolveChannel, type BrowserChannel } from './channel.js';
 import { logger } from './logger.js';
 import type { OutputFormat } from './extract.js';
 
 export async function runMcpServer(): Promise<void> {
   const downloadDir = resolveDownloadDir();
-  const browser = new BrowserSingleton({
-    profileDir: resolveProfileDir(),
-    idleTimeoutMs: 300_000,
-    startMinimized: true,
-    downloadDir,
-  });
+  const baseProfileDir = resolveProfileDir();
   const queue = new FifoQueue({ queueTimeoutMs: 30_000 });
+
+  // One reusable browser per channel (each with its own profile). The server
+  // tears the browser down after every call, so this map just caches the
+  // singleton objects; the underlying browser is relaunched on next use.
+  const browsers = new Map<BrowserChannel, BrowserSingleton>();
+  const browserFor = (channel: BrowserChannel): BrowserSingleton => {
+    let b = browsers.get(channel);
+    if (!b) {
+      b = new BrowserSingleton({
+        profileDir: profileDirForChannel(baseProfileDir, channel),
+        idleTimeoutMs: 300_000,
+        startMinimized: true,
+        channel,
+        downloadDir,
+      });
+      browsers.set(channel, b);
+    }
+    return b;
+  };
 
   const server = new Server(
     { name: 'browser-webfetch', version: '0.1.0' },
@@ -59,6 +74,12 @@ export async function runMcpServer(): Promise<void> {
               description:
                 'Force the interactive flow: surface the Chromium window and wait for the user to finish (e.g. log in) and CLOSE the tab, then return the last page content. Use when a response looks like a login/SSO page or otherwise needs the user to act. Default: false.',
             },
+            browser: {
+              type: 'string',
+              enum: ['chrome', 'msedge', 'chromium'],
+              description:
+                "Which browser to launch. Default 'chrome' (the real installed Google Chrome) already clears strict anti-bots (Qrator, DataDome, etc.) via its genuine TLS fingerprint, so usually leave this unset. Set it only to: 'chromium' = the self-contained bundled build (faster, no system browser needed, but more likely to be blocked) for simple sites where speed matters; 'msedge' = real Microsoft Edge, e.g. if a site still blocks Chrome or Chrome isn't installed. Falls back automatically when the requested binary is missing.",
+            },
           },
           required: ['url'],
         },
@@ -77,6 +98,7 @@ export async function runMcpServer(): Promise<void> {
       manual_timeout?: number;
       download?: boolean;
       interactive?: boolean;
+      browser?: string;
     };
     if (!args.url) {
       throw new BwfError(ErrorCode.INVALID_ARGS, 'url is required');
@@ -85,6 +107,8 @@ export async function runMcpServer(): Promise<void> {
     if (!['markdown', 'html', 'text'].includes(format)) {
       throw new BwfError(ErrorCode.INVALID_ARGS, `invalid format: ${format}`);
     }
+    const channel = resolveChannel(args.browser);
+    const browser = browserFor(channel);
     try {
       const result = await fetchUrl({
         url: args.url,
@@ -122,7 +146,7 @@ export async function runMcpServer(): Promise<void> {
   await server.connect(transport);
 
   const shutdown = async () => {
-    await browser.close();
+    await Promise.all([...browsers.values()].map((b) => b.close().catch(() => undefined)));
     process.exit(0);
   };
   process.on('SIGINT', shutdown);

@@ -15,10 +15,19 @@ import {
   waitForProfileFree,
 } from './reclaim.js';
 import { BwfError, ErrorCode, buildLaunchFailureMessage } from './errors.js';
+import {
+  type BrowserChannel,
+  channelCandidates,
+  channelLaunchOption,
+  isChannelUnavailableError,
+} from './channel.js';
 
 export interface BrowserSingletonOptions {
   profileDir: string;
   idleTimeoutMs: number;
+  // Which browser binary to launch. Defaults to the bundled Chromium when
+  // omitted (preserving prior behaviour for callers that don't opt in).
+  channel?: BrowserChannel;
   windowPosition?: { x: number; y: number };
   windowSize?: { width: number; height: number };
   startMinimized?: boolean;
@@ -32,6 +41,9 @@ export class BrowserSingleton {
   private activeOps = 0;
   private didSweep = false;
   private ephemeralProfileDir: string | null = null;
+  // The channel actually launched — may differ from the requested one after a
+  // fallback (e.g. requested chrome, not installed → bundled chromium).
+  private activeChannel: BrowserChannel = 'chromium';
   // A free, reusable tab kept open between fetches. Seeded with the context's
   // launch tab so the first fetch reuses it instead of opening a second tab,
   // and re-parked on release so the persistent browser never drops to zero
@@ -195,16 +207,45 @@ export class BrowserSingleton {
   }
 
   private async launchContext(): Promise<BrowserContext> {
-    await ensureChromium();
     const startMinimized = this.opts.startMinimized !== false;
     const args = this.buildLaunchArgs(startMinimized);
+    const candidates = channelCandidates(this.opts.channel ?? 'chromium');
 
-    logger.info('launching browser', {
-      profileDir: this.opts.profileDir,
-      startMinimized,
-    });
+    let lastErr: unknown;
+    for (let i = 0; i < candidates.length; i++) {
+      const candidate = candidates[i];
+      this.activeChannel = candidate;
+      // The bundled Chromium must be downloaded on first use; system browsers
+      // (chrome/msedge) are already installed, so skip the ~150 MB download.
+      if (candidate === 'chromium') await ensureChromium();
 
-    const ctx = await this.launchWithRecovery(args);
+      logger.info('launching browser', {
+        profileDir: this.opts.profileDir,
+        channel: candidate,
+        startMinimized,
+      });
+
+      try {
+        const ctx = await this.launchWithRecovery(args);
+        return await this.afterLaunch(ctx, startMinimized);
+      } catch (err) {
+        lastErr = err;
+        const hasFallback = i < candidates.length - 1;
+        if (hasFallback && isChannelUnavailableError(err)) {
+          logger.warn('requested browser channel is not installed; falling back', {
+            channel: candidate,
+            next: candidates[i + 1],
+            err: err instanceof Error ? err.message : String(err),
+          });
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastErr; // unreachable: the last candidate either returns or throws
+  }
+
+  private async afterLaunch(ctx: BrowserContext, startMinimized: boolean): Promise<BrowserContext> {
     // Reuse the context's launch tab for the first fetch instead of opening a
     // second tab beside it.
     this.parkedPage = ctx.pages()[0] ?? null;
@@ -359,6 +400,10 @@ export class BrowserSingleton {
     return chromium.launchPersistentContext(profileDir, {
       headless: false,
       viewport: null,
+      // undefined for bundled Chromium; 'chrome'/'msedge' launch the installed
+      // system browser (its genuine fingerprint clears anti-bots the bundled
+      // build trips). rebrowser's CDP patches still apply on top.
+      channel: channelLaunchOption(this.activeChannel),
       args,
       ignoreDefaultArgs: ['--enable-automation'],
     });

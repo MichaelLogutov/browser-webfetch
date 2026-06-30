@@ -4,7 +4,8 @@ import { FifoQueue } from './queue.js';
 import { fetchUrl } from './fetch.js';
 import { BwfError, ErrorCode, exitCodeFor } from './errors.js';
 import { resolveDownloadDir } from './download.js';
-import { resolveProfileDir } from './profile.js';
+import { resolveProfileDir, profileDirForChannel } from './profile.js';
+import { resolveChannel } from './channel.js';
 import { logger } from './logger.js';
 import type { OutputFormat } from './extract.js';
 
@@ -16,6 +17,7 @@ interface CliFlags {
   queueTimeout?: number;
   idleTimeout?: number;
   profile?: string;
+  browser?: string;
   json?: boolean;
   download?: boolean;
   interactive?: boolean;
@@ -37,6 +39,10 @@ export async function runCli(argv: string[]): Promise<number> {
     .option('--queue-timeout <seconds>', 'Queue wait timeout', { default: 30 })
     .option('--idle-timeout <seconds>', 'Browser idle shutdown', { default: 300 })
     .option('--profile <path>', 'Profile dir override')
+    .option(
+      '--browser <name>',
+      'Browser to launch: chrome|msedge|chromium (default: chrome; env BROWSER_WEBFETCH_BROWSER)',
+    )
     .option('--json', 'Emit JSON envelope')
     .option('--download', 'Save raw bytes (PDF/image/binary) to disk and print the path')
     .option('--download-dir <path>', 'Override download directory')
@@ -52,10 +58,13 @@ export async function runCli(argv: string[]): Promise<number> {
       }
 
       const downloadDir = resolveDownloadDir(flags.downloadDir);
+      const channel = resolveChannel(flags.browser);
+      const baseProfileDir = resolveProfileDir(flags.profile);
       const browser = new BrowserSingleton({
-        profileDir: resolveProfileDir(flags.profile),
+        profileDir: profileDirForChannel(baseProfileDir, channel),
         idleTimeoutMs: (flags.idleTimeout ?? 300) * 1000,
         startMinimized: flags.show !== true,
+        channel,
         downloadDir,
       });
       const queue = new FifoQueue({ queueTimeoutMs: (flags.queueTimeout ?? 30) * 1000 });
