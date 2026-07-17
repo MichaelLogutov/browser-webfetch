@@ -52,16 +52,6 @@ export class BrowserSingleton {
 
   constructor(private readonly opts: BrowserSingletonOptions) {}
 
-  async withContext<T>(fn: (ctx: BrowserContext) => Promise<T>): Promise<T> {
-    const ctx = await this.ensureContext();
-    this.beginActivity();
-    try {
-      return await fn(ctx);
-    } finally {
-      this.endActivity();
-    }
-  }
-
   async acquireTab(): Promise<Page> {
     const ctx = await this.ensureContext();
     this.beginActivity();
@@ -400,6 +390,9 @@ export class BrowserSingleton {
     return chromium.launchPersistentContext(profileDir, {
       headless: false,
       viewport: null,
+      // Capture file downloads (default is true) so page.on('download') fires and
+      // saveAs() can persist a browser-triggered binary to the managed dir.
+      acceptDownloads: true,
       // undefined for bundled Chromium; 'chrome'/'msedge' launch the installed
       // system browser (its genuine fingerprint clears anti-bots the bundled
       // build trips). rebrowser's CDP patches still apply on top.

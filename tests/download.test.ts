@@ -1,8 +1,46 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, writeFileSync, utimesSync, readdirSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  existsSync,
+  writeFileSync,
+  utimesSync,
+  readdirSync,
+  readFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { deriveDownloadFilename, resolveDownloadDir, sweepOldDownloads } from '../src/download.js';
+import type { BrowserContext, Download } from 'rebrowser-playwright';
+import {
+  deriveDownloadFilename,
+  downloadToFile,
+  resolveDownloadDir,
+  saveDownloadToFile,
+  sweepOldDownloads,
+} from '../src/download.js';
+
+const FAKE_PDF = Buffer.from('%PDF-1.4\nfake\n%%EOF\n');
+
+function fakeCtx(headers: Record<string, string>, body: Buffer, status = 200): BrowserContext {
+  return {
+    request: {
+      get: async () => ({
+        ok: () => status >= 200 && status < 300,
+        status: () => status,
+        headers: () => headers,
+        body: async () => body,
+      }),
+    },
+  } as unknown as BrowserContext;
+}
+
+function fakeDownload(suggested: string, url: string, bytes: Buffer): Download {
+  return {
+    suggestedFilename: () => suggested,
+    url: () => url,
+    saveAs: async (dest: string) => writeFileSync(dest, bytes),
+  } as unknown as Download;
+}
 
 describe('deriveDownloadFilename', () => {
   it('uses Content-Disposition filename when present', () => {
@@ -69,6 +107,67 @@ describe('deriveDownloadFilename', () => {
     });
     expect(name.length).toBeLessThanOrEqual(120);
     expect(name.endsWith('.pdf')).toBe(true);
+  });
+});
+
+describe('downloadToFile content guard', () => {
+  it('throws NAV_ERROR when the server returns an HTML challenge instead of a file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bwf-guard-'));
+    try {
+      const ctx = fakeCtx(
+        { 'content-type': 'text/html; charset=utf-8' },
+        Buffer.from('<!DOCTYPE html><html><body>js-challenge</body></html>'),
+      );
+      await expect(downloadToFile(ctx, 'https://x/download/1', dir, 1000)).rejects.toMatchObject({
+        code: 'NAV_ERROR',
+      });
+      expect(readdirSync(dir)).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('saves the file when the server returns a real binary content-type', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bwf-ok-'));
+    try {
+      const ctx = fakeCtx({ 'content-type': 'application/pdf' }, FAKE_PDF);
+      const res = await downloadToFile(ctx, 'https://x/file.pdf', dir, 1000);
+      expect(res.contentType).toContain('application/pdf');
+      expect(res.size).toBe(FAKE_PDF.length);
+      expect(readdirSync(dir)).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('saveDownloadToFile', () => {
+  it('saves a captured browser download using its suggested filename', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bwf-savedl-'));
+    try {
+      const res = await saveDownloadToFile(
+        fakeDownload('report.pdf', 'https://x/download/1', FAKE_PDF),
+        dir,
+      );
+      expect(res.path.endsWith('report.pdf')).toBe(true);
+      expect(res.size).toBe(FAKE_PDF.length);
+      expect(readFileSync(res.path)).toEqual(FAKE_PDF);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('derives a filename from the URL when none is suggested', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bwf-savedl2-'));
+    try {
+      const res = await saveDownloadToFile(
+        fakeDownload('', 'https://x/docs/manual.pdf', FAKE_PDF),
+        dir,
+      );
+      expect(res.path.endsWith('manual.pdf')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import envPaths from 'env-paths';
 import { mkdirSync, promises as fsp } from 'node:fs';
 import path from 'node:path';
-import type { BrowserContext } from 'rebrowser-playwright';
+import type { BrowserContext, Download } from 'rebrowser-playwright';
 import { BwfError, ErrorCode } from './errors.js';
 import { logger } from './logger.js';
 
@@ -117,6 +117,12 @@ export interface DownloadResult {
   size: number;
 }
 
+export function isHtmlLike(contentType: string | undefined): boolean {
+  if (!contentType) return true;
+  const ct = contentType.split(';')[0].trim().toLowerCase();
+  return ct === 'text/html' || ct === 'application/xhtml+xml';
+}
+
 export async function downloadToFile(
   ctx: BrowserContext,
   url: string,
@@ -138,12 +144,46 @@ export async function downloadToFile(
   }
   const headers = response.headers();
   const contentType = headers['content-type'] ?? 'application/octet-stream';
+  // A binary endpoint that answers with HTML is not the file — it is an anti-bot
+  // challenge or an error page. Saving it would masquerade a 1.5 KB stub as the
+  // requested PDF, so refuse instead of writing garbage to disk.
+  if (isHtmlLike(contentType)) {
+    throw new BwfError(
+      ErrorCode.NAV_ERROR,
+      `download did not return a file: the server responded with HTML (content-type ${contentType}), ` +
+        'most likely an anti-bot challenge or an error page rather than the requested binary',
+      { url, contentType, htmlChallenge: true },
+    );
+  }
   const contentDisposition = headers['content-disposition'];
   const baseName = deriveDownloadFilename({ url, contentType, contentDisposition });
   const finalPath = await pickUniquePath(dir, baseName);
   const body = await response.body();
   await fsp.writeFile(finalPath, body);
   return { path: finalPath, contentType, size: body.length };
+}
+
+/**
+ * Persist a browser-triggered download (a `Content-Disposition: attachment`
+ * response, captured via `page.on('download')`) into the managed download dir.
+ * Unlike downloadToFile this reuses the full browser navigation — JS challenges
+ * and cookies are already handled by the page — so it just names and saves the
+ * bytes the browser already fetched.
+ */
+export async function saveDownloadToFile(
+  download: Download,
+  dir: string,
+): Promise<DownloadResult> {
+  const suggested = download.suggestedFilename();
+  const baseName = deriveDownloadFilename({
+    url: download.url(),
+    contentType: 'application/octet-stream',
+    contentDisposition: suggested ? `attachment; filename="${suggested}"` : undefined,
+  });
+  const finalPath = await pickUniquePath(dir, baseName);
+  await download.saveAs(finalPath);
+  const { size } = await fsp.stat(finalPath);
+  return { path: finalPath, contentType: 'application/octet-stream', size };
 }
 
 async function pickUniquePath(dir: string, name: string): Promise<string> {

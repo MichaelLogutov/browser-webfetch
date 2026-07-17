@@ -1,10 +1,15 @@
-import { errors as PlaywrightErrors, type Page, type Response } from 'rebrowser-playwright';
+import {
+  errors as PlaywrightErrors,
+  type Download,
+  type Page,
+  type Response,
+} from 'rebrowser-playwright';
 import { JSDOM } from 'jsdom';
 import { BrowserSingleton } from './browser.js';
 import { FifoQueue } from './queue.js';
 import { BwfError, ErrorCode } from './errors.js';
 import { detectCaptchaInDom, detectLoginWall, readableContentLength } from './captcha.js';
-import { downloadToFile } from './download.js';
+import { downloadToFile, isHtmlLike, saveDownloadToFile } from './download.js';
 import { extractContent, OutputFormat } from './extract.js';
 import {
   injectOverlay,
@@ -40,22 +45,13 @@ export function fetchUrl(req: FetchRequest): Promise<FetchResult> {
 
 async function runOne(req: FetchRequest): Promise<FetchResult> {
   const t0 = Date.now();
-
-  if (req.download === true) {
-    const dl = await req.browser.withContext((ctx) =>
-      downloadToFile(ctx, req.url, req.downloadDir, req.navTimeoutMs),
-    );
-    return {
-      url: req.url,
-      finalUrl: req.url,
-      body: dl.path,
-      durationMs: Date.now() - t0,
-    };
-  }
-
   const page = await req.browser.acquireTab();
-  let releasedEarly = false;
   try {
+    if (req.download === true) {
+      const filePath = await downloadViaBrowser(page, req);
+      return { url: req.url, finalUrl: req.url, body: filePath, durationMs: Date.now() - t0 };
+    }
+
     const response = await navigate(page, req);
     const status = response?.status() ?? 200;
     const contentType = response?.headers()['content-type'];
@@ -65,25 +61,21 @@ async function runOne(req: FetchRequest): Promise<FetchResult> {
         url: req.url,
         contentType,
       });
-      releasedEarly = true;
-      await req.browser.releaseTab(page);
-      const dl = await req.browser.withContext((ctx) =>
-        downloadToFile(ctx, req.url, req.downloadDir, req.navTimeoutMs),
-      );
-      return {
-        url: req.url,
-        finalUrl: req.url,
-        body: dl.path,
-        durationMs: Date.now() - t0,
-      };
+      // The page already navigated here, so the context cookie jar is warm; fetch
+      // the bytes through it rather than a cold raw request.
+      const dl = await downloadToFile(page.context(), req.url, req.downloadDir, req.navTimeoutMs);
+      return { url: req.url, finalUrl: req.url, body: dl.path, durationMs: Date.now() - t0 };
     }
 
     if (req.interactive === true) {
-      const html = await handleInteractive(page, req);
+      const outcome = await handleInteractive(page, req);
+      if (outcome.kind === 'download') {
+        return { url: req.url, finalUrl: req.url, body: outcome.filePath, durationMs: Date.now() - t0 };
+      }
       return {
         url: req.url,
         finalUrl: page.url(),
-        body: extractContent(html, req.format, req.url),
+        body: extractContent(outcome.html, req.format, req.url),
         durationMs: Date.now() - t0,
       };
     }
@@ -103,14 +95,154 @@ async function runOne(req: FetchRequest): Promise<FetchResult> {
       durationMs: Date.now() - t0,
     };
   } finally {
-    if (!releasedEarly) await req.browser.releaseTab(page);
+    await req.browser.releaseTab(page);
   }
 }
 
-function isHtmlLike(contentType: string | undefined): boolean {
-  if (!contentType) return true;
-  const ct = contentType.split(';')[0].trim().toLowerCase();
-  return ct === 'text/html' || ct === 'application/xhtml+xml';
+// How many times captureBytesInPage re-runs the in-page fetch while a JS
+// challenge is still settling (its redirect / cookie dance runs a beat after
+// navigation returns), and the pause between tries.
+const DOWNLOAD_SETTLE_ATTEMPTS = 4;
+const DOWNLOAD_SETTLE_DELAY_MS = 2000;
+
+/**
+ * Download a binary through the real browser so JS challenges / anti-bot walls
+ * are actually cleared — the old raw request executed no JS and just saved the
+ * challenge stub. Two outcomes:
+ *   - the server streams an attachment (`Content-Disposition: attachment`) or the
+ *     browser downloads this type outright → a `download` event fires, saved as-is;
+ *   - the URL renders as a page (JS challenge, captcha wall, or an in-browser PDF
+ *     viewer) → clear any captcha, then pull the bytes via an in-page fetch
+ *     (see captureBytesInPage).
+ */
+async function downloadViaBrowser(page: Page, req: FetchRequest): Promise<string> {
+  let native: Download | null = null;
+  const onDownload = (d: Download): void => {
+    native ??= d;
+  };
+  page.on('download', onDownload);
+  let response: Response | null = null;
+  try {
+    const nav = await navigateForDownload(page, req);
+    response = nav.response;
+    if (!native && nav.downloadAbort) {
+      native = await page.waitForEvent('download', { timeout: 10_000 }).catch(() => null);
+    }
+  } finally {
+    page.off('download', onDownload);
+  }
+  if (native) return (await saveDownloadToFile(native, req.downloadDir)).path;
+  await handleCaptchaIfPresent(page, response?.status() ?? 200, req);
+  return await captureBytesInPage(page, req);
+}
+
+/**
+ * Navigate to a binary URL. Beyond the normal timeout tolerance, a navigation
+ * that turns into a download aborts the main request (`net::ERR_ABORTED`); that
+ * is expected here and reported so the caller can pick up the download event.
+ */
+async function navigateForDownload(
+  page: Page,
+  req: FetchRequest,
+): Promise<{ response: Response | null; downloadAbort: boolean }> {
+  try {
+    const response = await page.goto(req.url, {
+      waitUntil: 'networkidle',
+      timeout: req.navTimeoutMs,
+    });
+    return { response, downloadAbort: false };
+  } catch (err) {
+    if (err instanceof PlaywrightErrors.TimeoutError) return { response: null, downloadAbort: false };
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('net::ERR_ABORTED') || msg.includes('Download is starting')) {
+      return { response: null, downloadAbort: true };
+    }
+    throw new BwfError(ErrorCode.NAV_ERROR, `navigation failed: ${msg}`, { url: req.url });
+  }
+}
+
+/**
+ * Runs inside the page: fetch the URL with the browser's own network stack — its
+ * genuine TLS/JA3 fingerprint and the page's clearance cookies — which a raw
+ * Playwright request (context.request) lacks, so anti-bot endpoints that
+ * fingerprint the handshake (Servicepipe, Qrator, DataDome) return the file
+ * instead of a fresh challenge. A binary body is handed to the browser's own
+ * download machinery (an `<a download>` click) so even a 40+ MB PDF streams to
+ * disk rather than crossing the CDP bridge as a giant string.
+ */
+const IN_PAGE_DOWNLOAD = async (arg: { url: string; timeoutMs: number }) => {
+  try {
+    const resp = await fetch(arg.url, {
+      credentials: 'include',
+      signal: AbortSignal.timeout(arg.timeoutMs),
+    });
+    const ct = resp.headers.get('content-type') || '';
+    if (!resp.ok) return { kind: 'error', status: resp.status, ct };
+    if (/^(?:text\/html|application\/xhtml\+xml)\b/i.test(ct)) {
+      return { kind: 'challenge', status: resp.status, ct };
+    }
+    const blob = await resp.blob();
+    let base = '';
+    try {
+      base = new URL(arg.url).pathname.split('/').filter(Boolean).pop() || '';
+    } catch {
+      base = '';
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = base || 'download';
+    document.body.appendChild(a);
+    a.click();
+    return { kind: 'download', status: resp.status, ct };
+  } catch {
+    return { kind: 'error', status: 0, ct: '' };
+  }
+};
+
+/**
+ * Pull the file bytes through the browser network via an in-page fetch (see
+ * IN_PAGE_DOWNLOAD), capturing the resulting browser download. Retries while a JS
+ * challenge is still settling; a page that never yields a file raises a challenge
+ * error rather than saving a stub.
+ */
+async function captureBytesInPage(page: Page, req: FetchRequest): Promise<string> {
+  let captured: Download | null = null;
+  const onDownload = (d: Download): void => {
+    captured ??= d;
+  };
+  page.on('download', onDownload);
+  try {
+    await page.waitForLoadState('networkidle', { timeout: req.navTimeoutMs }).catch(() => {});
+    let lastCt = '';
+    for (let attempt = 0; attempt < DOWNLOAD_SETTLE_ATTEMPTS; attempt++) {
+      const probe = await page
+        .evaluate(IN_PAGE_DOWNLOAD, { url: req.url, timeoutMs: req.navTimeoutMs })
+        .catch(() => ({ kind: 'retry', status: 0, ct: '' }));
+      if (probe.kind === 'download') {
+        const dl = captured ?? (await page.waitForEvent('download', { timeout: req.navTimeoutMs }));
+        return (await saveDownloadToFile(dl, req.downloadDir)).path;
+      }
+      if (probe.kind === 'error' && probe.status >= 400) {
+        throw new BwfError(ErrorCode.NAV_ERROR, `download failed: HTTP ${probe.status}`, {
+          url: req.url,
+        });
+      }
+      lastCt = probe.ct;
+      if (attempt < DOWNLOAD_SETTLE_ATTEMPTS - 1) await sleep(DOWNLOAD_SETTLE_DELAY_MS);
+    }
+    throw new BwfError(
+      ErrorCode.NAV_ERROR,
+      `download did not return a file: the endpoint kept answering with HTML (last content-type ${lastCt || 'unknown'}); ` +
+        'the anti-bot challenge did not clear',
+      { url: req.url, htmlChallenge: true },
+    );
+  } finally {
+    page.off('download', onDownload);
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function navigate(page: Page, req: FetchRequest): Promise<Response | null> {
@@ -137,14 +269,22 @@ async function maybeWaitForSelector(page: Page, req: FetchRequest): Promise<void
   }
 }
 
-async function handleInteractive(page: Page, req: FetchRequest): Promise<string> {
+type InteractiveOutcome = { kind: 'html'; html: string } | { kind: 'download'; filePath: string };
+
+async function handleInteractive(page: Page, req: FetchRequest): Promise<InteractiveOutcome> {
   logger.info('interactive flag set; surfacing window for manual interaction', {
     url: req.url,
   });
   await req.browser.unminimize(page);
   await page.bringToFront();
-  const { html } = await waitForManualInteraction(page, { timeoutMs: req.manualTimeoutMs });
-  return html;
+  const res = await waitForManualInteraction(page, {
+    timeoutMs: req.manualTimeoutMs,
+    captureDownloadDir: req.downloadDir,
+  });
+  if (res.reason === 'downloaded' && res.filePath) {
+    return { kind: 'download', filePath: res.filePath };
+  }
+  return { kind: 'html', html: res.html };
 }
 
 async function handleLoginWallIfPresent(

@@ -1,5 +1,7 @@
-import type { Page } from 'rebrowser-playwright';
+import type { Download, Page } from 'rebrowser-playwright';
 import { BwfError, ErrorCode } from './errors.js';
+import { saveDownloadToFile } from './download.js';
+import { logger } from './logger.js';
 
 const OVERLAY_HTML = `
 <div id="__bwf_overlay" style="
@@ -69,7 +71,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-export type InteractionEndReason = 'closed' | 'resolved';
+export type InteractionEndReason = 'closed' | 'resolved' | 'downloaded';
 
 export interface ManualInteractionOptions {
   timeoutMs: number;
@@ -77,19 +79,26 @@ export interface ManualInteractionOptions {
   // freshly loaded HTML on each load event. Used by the auto login-wall flow;
   // omitted by the forced `interactive` flow (which only ends on tab close).
   isResolved?: (url: string, html: string) => boolean;
+  // When set, a file the user downloads during the interaction is saved into this
+  // directory and ends the wait with reason 'downloaded'. Without it a download
+  // would be silently discarded and only the page HTML returned.
+  captureDownloadDir?: string;
 }
 
 export interface ManualInteractionResult {
   html: string;
   reason: InteractionEndReason;
+  // Absolute path of the saved file when reason === 'downloaded'.
+  filePath?: string;
 }
 
 /**
  * Surface-and-wait for manual interaction (login, etc.). No DOM overlay is
  * injected. Content is snapshotted on every `load`/`domcontentloaded` (no
  * polling); the wait ends when the user closes the tab, when `isResolved`
- * becomes true, or — by throwing MANUAL_TIMEOUT — when `timeoutMs` elapses.
- * Returns a live read if the page is still open, else the last snapshot.
+ * becomes true, when the user downloads a file (if `captureDownloadDir` is set),
+ * or — by throwing MANUAL_TIMEOUT — when `timeoutMs` elapses. Returns a live read
+ * if the page is still open, else the last snapshot.
  */
 export function waitForManualInteraction(
   page: Page,
@@ -128,6 +137,26 @@ export function waitForManualInteraction(
     };
     const onClose = (): void => finish('closed', lastSnapshot);
 
+    // A file the user downloads ends the wait as 'downloaded'. Claim the settle
+    // synchronously so a concurrent load/close/timeout can't win, then save the
+    // bytes (async) and resolve with the file path.
+    const onDownload = (download: Download): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      logger.info('interactive download captured', { url: download.url() });
+      saveDownloadToFile(download, opts.captureDownloadDir as string)
+        .then((dl) => {
+          cleanup();
+          resolve({ html: '', reason: 'downloaded', filePath: dl.path });
+        })
+        .catch((err) => {
+          cleanup();
+          const msg = err instanceof Error ? err.message : String(err);
+          reject(new BwfError(ErrorCode.INTERNAL, `saving interactive download failed: ${msg}`));
+        });
+    };
+
     function finish(reason: InteractionEndReason, html: string): void {
       if (settled) return;
       settled = true;
@@ -139,12 +168,14 @@ export function waitForManualInteraction(
       page.off('load', onLoad);
       page.off('domcontentloaded', onLoad);
       page.off('close', onClose);
+      page.off('download', onDownload);
     }
 
     // Attach listeners synchronously so an early load/close is never missed.
     page.on('load', onLoad);
     page.on('domcontentloaded', onLoad);
     page.on('close', onClose);
+    if (opts.captureDownloadDir) page.on('download', onDownload);
     armTimer();
 
     // Seed an initial snapshot, but don't clobber one a load event already set.
