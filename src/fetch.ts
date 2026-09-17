@@ -99,11 +99,17 @@ async function runOne(req: FetchRequest): Promise<FetchResult> {
   }
 }
 
-// How many times captureBytesInPage re-runs the in-page fetch while a JS
-// challenge is still settling (its redirect / cookie dance runs a beat after
-// navigation returns), and the pause between tries.
+// How many times captureBytesInPage re-probes the endpoint while a JS challenge
+// is still settling (its redirect / cookie dance runs a beat after navigation
+// returns), and the pause between tries.
 const DOWNLOAD_SETTLE_ATTEMPTS = 4;
 const DOWNLOAD_SETTLE_DELAY_MS = 2000;
+
+// Moving a file's bytes is not a navigation: a large download legitimately runs
+// for minutes, so it must never be measured against navTimeoutMs. The browser's
+// own download machinery carries no deadline at all; this budget only bounds the
+// raw-request fallback below.
+const DOWNLOAD_TRANSFER_TIMEOUT_MS = 10 * 60_000;
 
 /**
  * Download a binary through the real browser so JS challenges / anti-bot walls
@@ -161,49 +167,68 @@ async function navigateForDownload(
   }
 }
 
+interface ProbeResult {
+  kind: 'binary' | 'challenge' | 'error' | 'retry';
+  status: number;
+  ct: string;
+  detail: string;
+}
+
 /**
- * Runs inside the page: fetch the URL with the browser's own network stack — its
- * genuine TLS/JA3 fingerprint and the page's clearance cookies — which a raw
- * Playwright request (context.request) lacks, so anti-bot endpoints that
- * fingerprint the handshake (Servicepipe, Qrator, DataDome) return the file
- * instead of a fresh challenge. A binary body is handed to the browser's own
- * download machinery (an `<a download>` click) so even a 40+ MB PDF streams to
- * disk rather than crossing the CDP bridge as a giant string.
+ * Runs inside the page: ask the endpoint what it is answering with, using the
+ * browser's own network stack — its genuine TLS/JA3 fingerprint and the page's
+ * clearance cookies — which a raw Playwright request (context.request) lacks, so
+ * anti-bot endpoints that fingerprint the handshake (Servicepipe, Qrator,
+ * DataDome) reveal the file instead of a fresh challenge.
+ *
+ * Only the response headers are wanted, so the body is aborted the moment they
+ * land: the bytes themselves are pulled afterwards by the browser's download
+ * machinery, which streams to disk instead of buffering the whole file in the
+ * renderer. That also keeps the timeout honest — it bounds how long the endpoint
+ * may take to answer, never how long a large file takes to transfer.
  */
-const IN_PAGE_DOWNLOAD = async (arg: { url: string; timeoutMs: number }) => {
+const IN_PAGE_PROBE = async (arg: { url: string; timeoutMs: number }): Promise<ProbeResult> => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), arg.timeoutMs);
   try {
-    const resp = await fetch(arg.url, {
-      credentials: 'include',
-      signal: AbortSignal.timeout(arg.timeoutMs),
-    });
+    const resp = await fetch(arg.url, { credentials: 'include', signal: controller.signal });
     const ct = resp.headers.get('content-type') || '';
-    if (!resp.ok) return { kind: 'error', status: resp.status, ct };
+    const status = resp.status;
+    controller.abort();
+    if (!resp.ok) return { kind: 'error', status, ct, detail: '' };
     if (/^(?:text\/html|application\/xhtml\+xml)\b/i.test(ct)) {
-      return { kind: 'challenge', status: resp.status, ct };
+      return { kind: 'challenge', status, ct, detail: '' };
     }
-    const blob = await resp.blob();
-    let base = '';
-    try {
-      base = new URL(arg.url).pathname.split('/').filter(Boolean).pop() || '';
-    } catch {
-      base = '';
-    }
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = base || 'download';
-    document.body.appendChild(a);
-    a.click();
-    return { kind: 'download', status: resp.status, ct };
-  } catch {
-    return { kind: 'error', status: 0, ct: '' };
+    return { kind: 'binary', status, ct, detail: '' };
+  } catch (err) {
+    const e = err as { name?: string; message?: string };
+    return { kind: 'error', status: 0, ct: '', detail: `${e?.name ?? 'Error'}: ${e?.message ?? ''}` };
+  } finally {
+    clearTimeout(timer);
   }
 };
 
 /**
- * Pull the file bytes through the browser network via an in-page fetch (see
- * IN_PAGE_DOWNLOAD), capturing the resulting browser download. Retries while a JS
- * challenge is still settling; a page that never yields a file raises a challenge
- * error rather than saving a stub.
+ * Runs inside the page: hand the URL to the browser's download machinery via an
+ * `<a download>` click, so Chrome fetches it through its own network stack and
+ * streams it straight to disk — no size ceiling, no renderer buffering and no
+ * deadline of our own. Same-origin only; a cross-origin URL has its `download`
+ * attribute ignored, which the caller detects by the absent download event.
+ */
+const IN_PAGE_TRIGGER_DOWNLOAD = (url: string): void => {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = '';
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+};
+
+/**
+ * Pull the file bytes through the browser network, retrying while a JS challenge
+ * is still settling. A page that never yields a file raises an error describing
+ * what the endpoint actually did, rather than saving a stub.
  */
 async function captureBytesInPage(page: Page, req: FetchRequest): Promise<string> {
   let captured: Download | null = null;
@@ -213,32 +238,74 @@ async function captureBytesInPage(page: Page, req: FetchRequest): Promise<string
   page.on('download', onDownload);
   try {
     await page.waitForLoadState('networkidle', { timeout: req.navTimeoutMs }).catch(() => {});
-    let lastCt = '';
+    let last: ProbeResult = { kind: 'retry', status: 0, ct: '', detail: '' };
     for (let attempt = 0; attempt < DOWNLOAD_SETTLE_ATTEMPTS; attempt++) {
-      const probe = await page
-        .evaluate(IN_PAGE_DOWNLOAD, { url: req.url, timeoutMs: req.navTimeoutMs })
-        .catch(() => ({ kind: 'retry', status: 0, ct: '' }));
-      if (probe.kind === 'download') {
-        const dl = captured ?? (await page.waitForEvent('download', { timeout: req.navTimeoutMs }));
-        return (await saveDownloadToFile(dl, req.downloadDir)).path;
-      }
-      if (probe.kind === 'error' && probe.status >= 400) {
-        throw new BwfError(ErrorCode.NAV_ERROR, `download failed: HTTP ${probe.status}`, {
+      last = await page
+        .evaluate(IN_PAGE_PROBE, { url: req.url, timeoutMs: req.navTimeoutMs })
+        .catch((err: unknown) => ({
+          kind: 'retry' as const,
+          status: 0,
+          ct: '',
+          detail: err instanceof Error ? err.message.split('\n')[0] : String(err),
+        }));
+      if (last.kind === 'binary') return await streamBytesToDisk(page, req, () => captured);
+      if (last.kind === 'error' && last.status >= 400) {
+        throw new BwfError(ErrorCode.NAV_ERROR, `download failed: HTTP ${last.status}`, {
           url: req.url,
         });
       }
-      lastCt = probe.ct;
       if (attempt < DOWNLOAD_SETTLE_ATTEMPTS - 1) await sleep(DOWNLOAD_SETTLE_DELAY_MS);
     }
-    throw new BwfError(
-      ErrorCode.NAV_ERROR,
-      `download did not return a file: the endpoint kept answering with HTML (last content-type ${lastCt || 'unknown'}); ` +
-        'the anti-bot challenge did not clear',
-      { url: req.url, htmlChallenge: true },
-    );
+    throw unresolvedDownloadError(req.url, last);
   } finally {
     page.off('download', onDownload);
   }
+}
+
+/**
+ * The endpoint is serving the real file: let the browser download it. The wait
+ * bounds how long the download takes to *start*, not to finish — Playwright's
+ * saveAs then waits out the whole transfer. When the `download` attribute was
+ * ignored (a cross-origin URL, e.g. after a redirect to a CDN) no download event
+ * ever fires, and the bytes are fetched through the context's warm cookie jar
+ * instead, on a transfer-sized budget.
+ */
+async function streamBytesToDisk(
+  page: Page,
+  req: FetchRequest,
+  peekCaptured: () => Download | null,
+): Promise<string> {
+  await page.evaluate(IN_PAGE_TRIGGER_DOWNLOAD, req.url).catch(() => undefined);
+  const dl =
+    peekCaptured() ??
+    (await page.waitForEvent('download', { timeout: req.navTimeoutMs }).catch(() => null));
+  if (dl) return (await saveDownloadToFile(dl, req.downloadDir)).path;
+  logger.warn('download attribute ignored (cross-origin); falling back to a context request', {
+    url: req.url,
+  });
+  const fallback = await downloadToFile(
+    page.context(),
+    req.url,
+    req.downloadDir,
+    DOWNLOAD_TRANSFER_TIMEOUT_MS,
+  );
+  return fallback.path;
+}
+
+function unresolvedDownloadError(url: string, last: ProbeResult): BwfError {
+  if (last.kind === 'challenge') {
+    return new BwfError(
+      ErrorCode.NAV_ERROR,
+      `download did not return a file: the endpoint kept answering with HTML (last content-type ${last.ct || 'unknown'}); ` +
+        'the anti-bot challenge did not clear',
+      { url, htmlChallenge: true },
+    );
+  }
+  return new BwfError(
+    ErrorCode.NAV_ERROR,
+    `download did not return a file: the endpoint never answered with readable headers (last error: ${last.detail || 'unknown'})`,
+    { url },
+  );
 }
 
 function sleep(ms: number): Promise<void> {

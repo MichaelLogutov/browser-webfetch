@@ -10,15 +10,47 @@ import { fetchUrl } from '../../src/fetch.js';
 import { FifoQueue } from '../../src/queue.js';
 
 const PDF_BYTES = Buffer.from('%PDF-1.4\n%fake-pdf-bytes\n%%EOF\n');
+const SLOW_CHUNKS = 8;
+const SLOW_CHUNK_DELAY_MS = 500;
+const SLOW_PDF_BYTES = Buffer.concat(Array.from({ length: SLOW_CHUNKS }, () => PDF_BYTES));
 
 let server: Server;
 let port: number;
 let tmpProfile: string;
 let tmpDownloads: string;
 let browser: BrowserSingleton;
+let slowHits = 0;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
+    // A challenged endpoint whose body then trickles in far slower than the
+    // navigation timeout: the first hit is the anti-bot stub, later ones are the
+    // real file streamed chunk by chunk.
+    if (req.url === '/challenged-slow.pdf') {
+      slowHits += 1;
+      if (slowHits === 1) {
+        const stub = '<!DOCTYPE html><html><head><title>Loading</title></head><body>please wait</body></html>';
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(stub);
+        return;
+      }
+      res.writeHead(200, {
+        'Content-Type': 'application/pdf',
+        'Content-Length': String(SLOW_PDF_BYTES.length),
+      });
+      let sent = 0;
+      const tick = (): void => {
+        if (sent >= SLOW_CHUNKS) {
+          res.end();
+          return;
+        }
+        res.write(PDF_BYTES);
+        sent += 1;
+        setTimeout(tick, SLOW_CHUNK_DELAY_MS);
+      };
+      tick();
+      return;
+    }
     if (req.url === '/file.pdf') {
       res.writeHead(200, {
         'Content-Type': 'application/pdf',
@@ -124,11 +156,11 @@ describe('downloadToFile (integration)', () => {
 describe('download via browser (fetchUrl download:true, integration)', () => {
   const queue = new FifoQueue({ queueTimeoutMs: 30_000 });
 
-  const download = (path: string) =>
+  const download = (path: string, navTimeoutMs = 15_000) =>
     fetchUrl({
       url: `http://127.0.0.1:${port}${path}`,
       format: 'markdown',
-      navTimeoutMs: 15_000,
+      navTimeoutMs,
       manualTimeoutMs: 15_000,
       download: true,
       downloadDir: tmpDownloads,
@@ -151,5 +183,11 @@ describe('download via browser (fetchUrl download:true, integration)', () => {
 
   it('refuses to save an HTML challenge as a file', async () => {
     await expect(download('/challenge')).rejects.toMatchObject({ code: 'NAV_ERROR' });
+  });
+
+  it('saves a file whose transfer outlasts the navigation timeout', async () => {
+    const result = await download('/challenged-slow.pdf', 2_000);
+    expect(existsSync(result.body)).toBe(true);
+    expect(readFileSync(result.body)).toEqual(SLOW_PDF_BYTES);
   });
 });
