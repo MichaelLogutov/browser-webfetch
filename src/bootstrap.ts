@@ -5,9 +5,8 @@
 // Windows configurations (specifically reported on machines running Kaspersky
 // real-time protection and on Node v26, see microsoft/playwright#40724) the
 // bundled yauzl hangs indefinitely after the Chromium zip download completes,
-// blocking the install. The upstream fix is in yauzl PR #168, but rebrowser-
-// playwright is pinned to playwright-core@1.52 which predates that fix and
-// upstream lags behind playwright by several minor versions.
+// blocking the install. This fallback was introduced with playwright-core@1.52;
+// keep it until extraction is verified on the affected configurations.
 //
 // As a workaround, this module:
 //   1. Runs `playwright-core install chromium` with a hard timeout.
@@ -22,12 +21,6 @@
 // launch fails with "Executable doesn't exist at ...\winldd-*\PrintDeps.exe"
 // even if chromium itself is installed.
 //
-// Once any of the following happens, this whole file can be reduced to the
-// "happy path" (just `spawnSync('playwright-core install chromium')`):
-//   - rebrowser-playwright tracks a playwright-core version that includes the
-//     yauzl fix, OR
-//   - we drop rebrowser-playwright in favour of stock playwright + manual
-//     stealth args.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { existsSync } from 'node:fs';
@@ -49,7 +42,7 @@ const PLAYWRIGHT_INSTALL_TIMEOUT_MS = 4 * 60 * 1000;
 const REQUIRED_COMPONENTS_WIN32 = ['chromium', 'winldd'] as const;
 
 interface BrowsersJson {
-  browsers: Array<{ name: string; revision: string }>;
+  browsers: Array<{ name: string; revision: string; browserVersion?: string }>;
 }
 
 let ensurePromise: Promise<void> | null = null;
@@ -179,11 +172,15 @@ async function manualInstallWindows(): Promise<void> {
   for (const name of REQUIRED_COMPONENTS_WIN32) {
     const entry = browsers.browsers.find((b) => b.name === name);
     if (!entry) throw new Error(`${name} entry not found in browsers.json`);
-    await installComponentWindows(name, entry.revision);
+    await installComponentWindows(name, entry.revision, entry.browserVersion);
   }
 }
 
-async function installComponentWindows(name: string, revision: string): Promise<void> {
+async function installComponentWindows(
+  name: string,
+  revision: string,
+  browserVersion?: string,
+): Promise<void> {
   const installDir = join(getInstallRoot(), `${name}-${revision}`);
 
   if (existsSync(join(installDir, 'INSTALLATION_COMPLETE'))) {
@@ -191,7 +188,12 @@ async function installComponentWindows(name: string, revision: string): Promise<
     return;
   }
 
-  const url = `https://cdn.playwright.dev/dbazure/download/playwright/builds/${name}/${revision}/${name}-win64.zip`;
+  if (name === 'chromium' && !browserVersion) {
+    throw new Error('chromium browserVersion missing from browsers.json');
+  }
+  const url = name === 'chromium'
+    ? `https://cdn.playwright.dev/builds/cft/${browserVersion}/win64/chrome-win64.zip`
+    : `https://cdn.playwright.dev/dbazure/download/playwright/builds/${name}/${revision}/${name}-win64.zip`;
   const zipPath = join(tmpdir(), `browser-webfetch-${name}-${revision}.zip`);
 
   process.stderr.write(`[browser-webfetch] Downloading ${url}\n`);
